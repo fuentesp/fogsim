@@ -1,0 +1,18 @@
+FOGSim, simulator for interconnection networks.
+https://code.google.com/p/fogsim/
+Copyright (C) 2014 University of Cantabria
+
+This simulator has been developed by the Computer Engineering Group 
+- Grupo de Ingenieria de Computadores (CEG/GIC), in the University of
+Cantabria. This simulator features the work by a number of current and
+former group members to be listed after, as well as code from the FSIN
+(now INSEE) simulator from J. Miguel-Alonso, A. Gonzalez and J. Navaridas.
+
+Main contributors:
+
+-Marina García González. Former Ph.D. student at GIC, University of Cantabria.
+-Miguel Odriozola Olavarría. Former B.Sc. student at GIC, University of Cantabria.
+-Pablo Fuentes Sáez. Current Ph.D. student at GIC.
+-Enrique Vallejo Gutiérrez. Lecturer in the University of Cantabria.
+-Ramón Beivide Palacio. Professor in the University of Cantabria.
+-Cristóbal Camarero Coterillo. Current Ph.D. student at GIC. 

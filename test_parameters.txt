@@ -1,0 +1,123 @@
+[CONFIG]
+maxCycles=1000
+## queueGen: injection queue size
+queueGen=1000
+dP=2
+dA=4
+dH=2
+delayTransmission_local=10
+delayTransmission_global=100
+delayInjection=1
+packetSize=8
+flitSize=8
+palm_tree_configuration=1
+channels_useful=3
+channels_inj=3
+channels_glob=2
+
+## Parameters for the allocators
+ageArbiter=0
+arbiter_iterations=2
+
+##################################################
+## TRAFFIC
+##################################################
+## traffic: 1 = RandomUniform; 2 = Adversial; 3 = AdversialRandomNode
+traffic=1
+
+## ADVERSARIAL TRAFFIC DISTANCE (group distance for traffic = 2, or traffic = 3)
+trafficAdvDist=2
+
+## TRANSIENT TRAFFIC:
+## starting at certain cycle (not considering warmup)
+## the distance to the destination group changes
+transientTraffic=0
+transientTrafficNextType=3
+transientTrafficNextDist=4
+transientTrafficCycle=0
+transientRecordCycles=1000
+transientRecordPrevCycles=100
+
+## BURST-TRAFFIC
+## Each node sends a fixed number of messages. 
+## Simulation ends when all meesages are consumed.
+## Each message can be either of 3 traffic patterns, with different probabilities.
+burst=0
+burstLength=500
+## burst traffic type 1
+burstTrafficType1=1
+burstTrafficAdvDist1=2
+burstTrafficTypePercent1=60
+## burst traffic type 2
+burstTrafficType2=3
+burstTrafficAdvDist2=2
+burstTrafficTypePercent2=20
+## burst traffic type 3
+burstTrafficType3=3
+burstTrafficAdvDist3=2
+burstTrafficTypePercent3=20
+
+
+##################################################
+## ON THE FLY MISROUTING - COMMON (RING AND VC)
+##################################################
+
+## forceMisrouting ignores Th_non_min, but RESPECTS th_min
+forceMisrouting=0
+strict_misroute=0
+Th_min=0
+## if (variableThreshold==1) then th_non_min = percent*qmin (variable with qmin)
+## else, th_non_min = percent   (static)
+variableThreshold=1
+percentLocalThreshold=70
+percentGlobalThreshold=70
+
+##################################################
+## VC BASED DEADLOCK AVOIDANCE
+##################################################
+
+## Dally: apply Dally's use of virtual channels
+dally=1
+
+## Valiant: 0 = routing Mínimo; 1 = routing Valiant
+valiant=0
+valiant_long=0
+
+## UGAL: ugal use with information from LOCAL queues
+ugal=0
+
+## PIGGYBACKING:
+## piggybacking and ring are NOT compatible (it needs Dally)
+## piggybacking and ugal are NOT compatible (to avoid misunderstatements)
+## piggybacking implies using UGAL local+global internally
+piggybacking=0
+piggybacking_coef=125
+
+## vc on the fly misrouting
+vc_misrouting_crg=0
+vc_misrouting_mm=1
+## allow local misroute in intermediate and destination groups
+vc_misrouting_local=1
+
+## VC_misroute restriction: 
+## if min output is a global link, then misroute only allowed if
+## that minimal global output is congested
+vc_misrouting_congested_restriction=1
+vc_misrouting_congested_restriction_coef_percent=150
+vc_misrouting_congested_restriction_t=5
+
+##################################################
+## RING BASED DEADLOCK AVOIDANCE
+##################################################
+
+## ringDirs : 0 = no ring; 1 = unidirectional ring; 2 =  bidirectional ring
+rings=0
+ringDirs=0
+restrictRingInjection=0
+forbid_from_injQueues_to_ring=0
+restrictLocalCycles=0 
+## EMBEDDED RING
+embeddedRing=0
+channels_ring=0
+
+trees=0
