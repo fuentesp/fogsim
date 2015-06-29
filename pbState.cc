@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,19 +23,19 @@
 pbState::pbState(int switchApos) :
 		m_switchApos(switchApos) {
 
-	m_offset = m_switchApos * g_dH;
-	m_globalLinkCongested = new bool*[g_globalLinksPerGroup];
+	m_offset = m_switchApos * g_h_global_ports_per_router;
+	m_globalLinkCongested = new bool*[g_global_links_per_group];
 
-	for (int link = 0; link < g_globalLinksPerGroup; link++) {
-		m_globalLinkCongested[link] = new bool[g_channels_glob];
-		for (int channel = 0; channel < g_channels_glob; channel++) {
+	for (int link = 0; link < g_global_links_per_group; link++) {
+		m_globalLinkCongested[link] = new bool[g_global_link_channels];
+		for (int channel = 0; channel < g_global_link_channels; channel++) {
 			m_globalLinkCongested[link][channel] = false;
 		}
 	}
 }
 
 pbState::~pbState() {
-	for (int link = 0; link < g_globalLinksPerGroup; link++) {
+	for (int link = 0; link < g_global_links_per_group; link++) {
 		delete[] m_globalLinkCongested[link];
 	}
 
@@ -45,14 +45,14 @@ pbState::~pbState() {
 void pbState::readFlit(const pbFlit& flit) {
 	int srcOffset, i, channel;
 
-	srcOffset = flit.GetSrcOffset();
+	srcOffset = flit.getSrcOffset();
 
 	assert(srcOffset != m_offset);
-	assert(srcOffset <= g_dA * g_dH - g_dH);
+	assert(srcOffset <= g_a_routers_per_group * g_h_global_ports_per_router - g_h_global_ports_per_router);
 
-	for (i = 0; i < g_dH; i++) {
-		for (channel = 0; channel < g_channels_glob; channel++) {
-			m_globalLinkCongested[srcOffset + i][channel] = flit.GetGlobalLinkInfo(i, channel);
+	for (i = 0; i < g_h_global_ports_per_router; i++) {
+		for (channel = 0; channel < g_global_link_channels; channel++) {
+			m_globalLinkCongested[srcOffset + i][channel] = flit.getGlobalLinkInfo(i, channel);
 		}
 	}
 }
@@ -64,14 +64,11 @@ void pbState::readFlit(const pbFlit& flit) {
  * This flit must be deleted after use.
  */
 pbFlit* pbState::createFlit(int latency) {
-
-	pbFlit* flit = new pbFlit(m_offset, m_globalLinkCongested, g_cycle + latency);
-
+	pbFlit* flit = new pbFlit(m_offset, m_globalLinkCongested, g_internal_cycle + latency);
 	return flit;
 }
 
 void pbState::update(int port, int channel, bool linkCongested) {
-
 	m_globalLinkCongested[port2groupGlobalLinkID(port, m_switchApos)][channel] = linkCongested;
 }
 
@@ -89,16 +86,16 @@ int port2groupGlobalLinkID(int port, int switchApos) {
 
 	int numRingPorts;
 
-	if ((g_rings == 0) || (g_embeddedRing != 0))
-		numRingPorts = 0;
-	else
+	if (g_deadlock_avoidance == RING)
 		numRingPorts = 2;
+	else
+		numRingPorts = 0;
 
-	assert(port >= g_offsetH);
+	assert(port >= g_global_router_links_offset);
 	assert(port < g_ports - numRingPorts);
-	assert(switchApos < g_dA);
+	assert(switchApos < g_a_routers_per_group);
 
-	return switchApos * g_dH + port - g_offsetH;
+	return switchApos * g_h_global_ports_per_router + port - g_global_router_links_offset;
 }
 
 /* 
@@ -108,8 +105,8 @@ int port2groupGlobalLinkID(int port, int switchApos) {
 int groupGlobalLinkID2port(int id, int switchApos) {
 
 	assert(id >= 0);
-	assert(id < g_dA * g_dH);
-	assert(switchApos < g_dA);
+	assert(id < g_a_routers_per_group * g_h_global_ports_per_router);
+	assert(switchApos < g_a_routers_per_group);
 
-	return id - switchApos * g_dH + g_offsetH;
+	return id - switchApos * g_h_global_ports_per_router + g_global_router_links_offset;
 }

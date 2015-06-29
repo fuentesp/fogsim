@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -18,23 +18,12 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#include <iostream>
-#include <string>
-#include <cstring>
-#include <cstdio>
-#include <string.h>
-#include <stdlib.h>
-#include <assert.h>
-#include <math.h>
-#include <fstream>
-
-#include "global.h"
 #include "communicator.h"
 
 communicator::communicator() {
 	this->id = -1;
 	this->size = -1;
-	this->process = new long[g_generatorsCount];
+	this->process = new long[g_number_generators];
 	this->root = -1;
 }
 

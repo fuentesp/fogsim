@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,9 +22,7 @@
 #define	PBSTATE_H
 
 #include "global.h"
-#include "pbFlit.h"
-#include <assert.h>
-#include <iostream>
+#include "flit/pbFlit.h"
 
 /* 
  * Class to store and manage global link state 
@@ -41,11 +39,8 @@ public:
 private:
 	int m_switchApos;
 	bool** m_globalLinkCongested;
-	/*
-	 * offset of the current switch's first global link
-	 * within the group's global links
-	 */
-	int m_offset;
+	int m_offset; /* offset of the current switch's first global link
+	 *				 within the group's global links */
 };
 
 int port2groupGlobalLinkID(int port, int switchApos);

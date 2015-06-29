@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -21,11 +21,9 @@
 #ifndef CONFIGURATIONFILE_H
 #define	CONFIGURATIONFILE_H
 
-#include <string>
 #include <string.h>
 #include <map>
 #include <vector>
-#include <iostream>
 #include <fstream>
 using namespace std;
 
@@ -34,9 +32,12 @@ using namespace std;
 #define CONF_SECTION_BEGIN '['
 #define CONF_SECTION_END ']'
 #define CONF_KEY_ASSIGN '='
+#define CONF_LIST_BEGIN '('
+#define CONF_LIST_END ')'
+#define CONF_LIST_ITEM ','
 
 enum {
-	SECTION, KEY, LIST,
+	SECTION, KEY, LIST, MAP,
 };
 
 typedef vector<string> listEntry_;
@@ -48,13 +49,16 @@ typedef struct {
 } entries;
 typedef map<string, entries *> section;
 
-class configFile {
+class ConfigFile {
 public:
-	configFile();
-	~configFile();
+	ConfigFile();
+	~ConfigFile();
+
 	int LoadConfig(string fileName);
 	int getListValues(const char *section, const char *key, vector<string> &value);
 	int getKeyValue(const char *section, const char *key, string &value);
+	int updateKeyValue(const char *section, char *line);
+	int checkSection(const char *section);
 	void flushConfig(void);
 
 private:

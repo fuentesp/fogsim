@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -21,38 +21,28 @@
 #ifndef torus_sim
 #define torus_sim
 
-#include <iostream>
-#include <string>
-#include <cstring>
-#include <cstdio>
-#include <string.h>
-#include <stdlib.h>
-#include <assert.h>
-#include <fstream>
-#include <vector>
-#include "buffer.h"
-#include "gModule.h"
-#include "generatorModule.h"
-#include "switchModule.h"
-#include "flitModule.h"
-#include "localArbiter.h"
-#include "globalArbiter.h"
-#include "configurationFile.h"
-#include "global.h"
-#include "trace.h"
-
-using namespace std;
+#include <limits.h>
+#include "generator/trace.h"
+#include "communicator.h"
 
 int module(int a, int b);
 bool parity(int a, int b);
 int main(int argc, char *argv[]);
-void read_configuration(char * filename);
-void create_network();
-void run_cycles();
-void write_output();
-void write_transient_output(char * output_name);
-void write_latency_histogram_output(char * output_name);
-void write_hops_histogram_output(char * output_name);
-void free_memory();
-
+void readConfiguration(int argc, char *argv[]);
+void createNetwork();
+void action();
+void writeOutput();
+void writeTransientOutput(char * output_name);
+void writeLatencyHistogram(char * output_name);
+void writeHopsHistogram(char * output_name);
+void freeMemory();
+void readSwitchType(const char * switch_type, SwitchType * var);
+void readTrafficPattern(const char * traffic_name, TrafficType * var);
+void readRoutingType(const char * routing_type, RoutingType * var);
+void readGlobalMisrouting(const char * global_misrouting, GlobalMisroutingPolicy * var);
+void readDeadlockAvoidanceMechanism(const char * d_a, DeadlockAvoidance * var);
+void readMisroutingTrigger(const char * d_a, MisroutingTrigger * var);
+void readTraceDistribution(const char * d_a, TraceAssignation * var);
+void readTraceMap(const char * tracemap_filename);
+void buildTraceMap();
 #endif

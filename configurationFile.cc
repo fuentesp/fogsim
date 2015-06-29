@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -19,18 +19,17 @@
  */
 
 #include "configurationFile.h"
+#include <iostream>
 
-configFile::configFile() {
+ConfigFile::ConfigFile() {
 }
 
-configFile::~configFile() {
+ConfigFile::~ConfigFile() {
 }
 
-int configFile::suppressSpaces(char *line) {
-	int len;
+int ConfigFile::suppressSpaces(char *line) {
 	int i = 0, j = 0;
-
-	len = strlen(line);
+	int len = strlen(line);
 	if (len > 0) {
 		while (isspace(line[i]) || line[i] == '\t') {
 			i++;
@@ -48,16 +47,14 @@ int configFile::suppressSpaces(char *line) {
 	return len;
 }
 
-int configFile::readLine(const char *line, string &section, string &key, vector<string> &values) {
-	int len;
-	int i = 0, j = 0;
+int ConfigFile::readLine(const char *line, string &section, string &key, vector<string> &values) {
 	string value;
 	string key_;
 	int separator;
 	int ret;
+	int len = strlen(line);
 
 	section = key = "";
-	len = strlen(line);
 
 	if (line[0] == CONF_SECTION_BEGIN && line[len - 1] == CONF_SECTION_END) {
 		section = line + 1;
@@ -65,36 +62,36 @@ int configFile::readLine(const char *line, string &section, string &key, vector<
 		ret = SECTION;
 	} else {
 		key_ = line;
-		separator = key_.find(CONF_KEY_ASSIGN, 0);
-		if (separator != -1) {       // Pair key_value
+		separator = key_.find(CONF_LIST_ITEM, 0);
+		if (separator != -1) {
+			/* List of values assigned in-order */
+			separator = key_.find(CONF_KEY_ASSIGN);
 			key = key_.substr(0, separator);
-			value = key_.substr(separator + 1, key_.size() - separator);
-			values.push_back(value);
-			ret = KEY;
-		} else {                // List
-			while (i < len) {
-				while (!isspace(line[i]) && line[i] != '\t' && i < len) {
-					i++;
-				}
-				value = (line + j);
-				if (i < len) {
-					value.erase(i - j, value.size() - (i - j));
-				}
-				if (j == 0) {
-					key = value;
-				} else {
-					values.push_back(value);
-				}
-				value.clear();
-				j = ++i;
+			key_ = key_.substr(separator + 1);
+			while (key_.find(CONF_LIST_ITEM) != -1) {
+				separator = key_.find(CONF_LIST_ITEM);
+				value = key_.substr(0, separator);
+				values.push_back(value);
+				key_ = key_.substr(separator + 1);
 			}
+			value = key_;
+			values.push_back(value);
 			ret = LIST;
+		} else {
+			separator = key_.find(CONF_KEY_ASSIGN, 0);
+			if (separator != -1) {		// Pair key_value
+				key = key_.substr(0, separator);
+				value = key_.substr(separator + 1, key_.size() - separator);
+				values.push_back(value);
+				ret = KEY;
+			}
 		}
 	}
+
 	return ret;
 }
 
-int configFile::getListValues(const char *section, const char *key, vector<string> &value) {
+int ConfigFile::getListValues(const char *section, const char *key, vector<string> &value) {
 	string section_ = section;
 	string key_ = key;
 	entries *entry;
@@ -113,7 +110,7 @@ int configFile::getListValues(const char *section, const char *key, vector<strin
 	return 0;
 }
 
-int configFile::getKeyValue(const char *section, const char *key, string &value) {
+int ConfigFile::getKeyValue(const char *section, const char *key, string &value) {
 	string section_ = section;
 	string key_ = key;
 	entries *entry;
@@ -131,12 +128,12 @@ int configFile::getKeyValue(const char *section, const char *key, string &value)
 	return 0;
 }
 
-int configFile::LoadConfig(string fileName) {
+int ConfigFile::LoadConfig(string fileName) {
 	fstream confFile;
 	vector < string > lines;
 	vector < string > values;
 	char line[MAXLINE];
-	unsigned int i;
+	unsigned int i, j;
 	string sectionName, key;
 	entries *sectionEntry = NULL;
 	section::iterator iter1;
@@ -169,15 +166,30 @@ int configFile::LoadConfig(string fileName) {
 				sectionEntry->listEntry[key] = values;
 				values.clear();
 				break;
+			case MAP:
+				if (sectionEntry->keyEntry.count(key)) {
+					values.push_back(sectionEntry->keyEntry[key]);
+				}
+				sectionEntry->listEntry[key] = values;
+				break;
 		}
 	}
 
+	for (iter1 = sectionEntries.begin(); iter1 != sectionEntries.end(); ++iter1) {
+		for (iter2 = iter1->second->keyEntry.begin(); iter2 != iter1->second->keyEntry.end(); ++iter2) {
+		}
+		for (iter3 = iter1->second->listEntry.begin(); iter3 != iter1->second->listEntry.end(); ++iter3) {
+			for (j = 0; j < (iter3->second).size(); j++) {
+			}
+		}
+
+	}
 	lines.clear();
 	confFile.clear();
 	return 0;
 }
 
-void configFile::flushConfig(void) {
+void ConfigFile::flushConfig(void) {
 	section::iterator iter1;
 	listEntries::iterator iter3;
 	int i;
@@ -197,3 +209,68 @@ void configFile::flushConfig(void) {
 	sectionEntries.clear();
 }
 
+/***
+ * Updates/inserts new key in given section. If section does not
+ * exist, will create it. This function is aimed to incorporate
+ * new parameters through the command line.
+ *
+ * MAIN RESTRICTION: this function will only work with simple
+ * values (KEY values), NOT with lists. Please take it into
+ * consideration.
+ */
+int ConfigFile::updateKeyValue(const char *section, char *line) {
+	/***
+	 * Read received line and update/insert key in corresponding section
+	 */
+	entries *entry = NULL;
+	string section_ = section;
+	string key;
+	string key_;
+	string value;
+	vector < string > values;
+	int separator;
+	int type;
+
+	/* Check if a section with the given name exists, and create it otherwise */
+	if (sectionEntries.count(section_)) {
+		entry = sectionEntries[section_];
+	} else {
+		entry = new entries;
+		sectionEntries[section_] = entry;
+	}
+
+	/* Determine entry's name and type (KEY/LIST) */
+	key_ = line;
+	separator = key_.find(CONF_KEY_ASSIGN, 0);
+	if (separator != -1) {       // Pair key_value
+		key = key_.substr(0, separator);
+		value = key_.substr(separator + 1, key_.size() - separator);
+		values.push_back(value);
+		type = KEY;
+	} else {
+		/* Since we can not accept (for the moment) list values, this is an error */
+		return -1;
+	}
+
+	/* Update/insert new entry. Sanity check: if entry exists,
+	 * ensure type suits previous definition */
+	switch (type) {
+		case KEY:
+			if (entry->listEntry.count(key_)) return -1;
+			entry->keyEntry[key] = values[0];
+			values.clear();
+			break;
+		case LIST:
+			if (entry->keyEntry.count(key_)) return -1;
+			entry->listEntry[key] = values;
+			values.clear();
+			break;
+	}
+
+	return 0;
+}
+
+int ConfigFile::checkSection(const char *section) {
+	string section_ = section;
+	return (sectionEntries.count(section_));
+}

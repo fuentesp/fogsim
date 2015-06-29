@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -18,12 +18,7 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#include "buffer.h"
 #include "gModule.h"
-#include "generatorModule.h"
-#include "switchModule.h"
-#include "flitModule.h"
-#include "dgflySimulator.h"
 
 using namespace std;
 
@@ -34,9 +29,5 @@ gModule::gModule() {
 gModule::gModule(string name) {
 	this->name = name;
 }
-
-gModule::~gModule() {
-}
-
 void gModule::action() {
 }

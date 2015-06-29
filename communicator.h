@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -20,6 +20,8 @@
 
 #ifndef COMMUNICATOR_
 #define	COMMUNICATOR_
+
+#include "global.h"
 
 class communicator {
 public:

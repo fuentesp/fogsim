@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  https://code.google.com/p/fogsim/
- Copyright (C) 2014 University of Cantabria
+ Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -18,11 +18,6 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <map>
-
 #include "global.h"
 
 class generatorModule;
@@ -30,262 +25,248 @@ class switchModule;
 
 using namespace std;
 
-bool g_ageArbiter = false;
-long long g_cycle = 0; /* current cycle */
-long long g_maxCycles = 10000;
-long long g_warmCycles = g_maxCycles;
-long long g_queueGen = 999999;
-long long g_queueSwtch_local = 10;
-long long g_queueSwtch_global = 100;
-int g_BUBBLE = 1;
-int g_numDims = 2;
-int g_dP = 4;
-int g_dA = 4;
-int g_dH = 1;
-int g_offsetA = 0;
-int g_offsetH = 0;
-int g_globalLinksPerGroup = g_dA * g_dH;
-long long g_delayTransmission_local = 1;
-long long g_delayTransmission_global = 1;
-long long g_delayInjection = 1;
-int g_ports = g_dP + g_dA - 1 + g_dH;
-int g_switchesCount = (g_dA * g_dH + 1) * g_dA;
-int g_generatorsCount = g_switchesCount * g_dP;
-int g_channels = 1;
-int g_channels_useful = 1;
-int g_channels_inj = 1;
-int g_channels_glob = 1;
-long long g_flitCount = 0;
-long long g_packetCount = 0;
-long long g_warmFlitCount = 0;
-long long g_warmPacketCount = 0;
-long long g_flitReceivedCount = 0;
-long long g_warmFlitReceivedCount = 0;
-long long g_warmPacketReceivedCount = 0;
-long long g_packetReceivedCount = 0;
-long long g_misroutedFlitCount = 0;
-long long g_local_misroutedFlitCount = 0;
-long long g_global_misroutedFlitCount = 0;
-int g_arbiter_iterations = 3;
-int g_packetSize = 1;
-int g_flitSize = 1;
-int g_flits_per_packet = 0;
-long g_phit_size = 4; //In bytes
-int g_probability = 1;
-ofstream g_outputFile;
-char g_trcFile[128];
-char g_pcfFile[128];
-long long g_totalHopCount = 0;
-long long g_totalLocalHopCount = 0;
-long long g_totalGlobalHopCount = 0;
-long long g_totalLocalRingHopCount = 0;
-long long g_totalGlobalRingHopCount = 0;
-long long g_totalLocalTreeHopCount = 0;
-long long g_totalGlobalTreeHopCount = 0;
-long long g_totalSubnetworkInjectionsCount = 0;
-long long g_totalRootSubnetworkInjectionsCount = 0;
-long long g_totalSourceSubnetworkInjectionsCount = 0;
-long long g_totalDestSubnetworkInjectionsCount = 0;
-long long g_totalLocalContentionCount = 0;
-long long g_totalGlobalContentionCount = 0;
-long long g_totalLocalRingContentionCount = 0;
-long long g_totalGlobalRingContentionCount = 0;
-long long g_totalLocalTreeContentionCount = 0;
-long long g_totalGlobalTreeContentionCount = 0;
-long long g_mi_seed = 1;
-long long g_portUseCount[100];
-long long g_portContentionCount[100];
-long long g_portAlreadyAssignedCount[100];
-int g_valiant = 0;
-bool g_valiant_long = false;
-int g_dally = 0;
-bool g_strictMisroute = false;
-int g_ugal = 0;
-int g_rings = 0;
-int g_ringDirs = 0;
-bool g_onlyRing2 = 0;
-int g_trees = 0;
-int g_treeRoot_node = -1;
-int g_rootP = -1;
-int g_rootH = -1;
-int g_traffic = 0;
-int g_mix_traffic = 0;
-int g_random_percent = 0;
-int g_adv_local_percent = 0;
-int g_adv_global_percent = 0;
-int g_restrictLocalCycles = 0;
-long long g_totalLatency = 0;
-long long g_totalPacketLatency = 0;
-long long g_totalInjectionQueueLatency = 0;
-long long g_totalBaseLatency = 0;
-long long g_flitExLatency = 0;
-long long g_packetLatency = 0;
-int g_fjm_times = 0;
-int g_forceMisrouting = 0;
-bool g_SM = 0;
-bool g_SMl = 0;
-bool g_lgl = 0;
-int g_ring_ports = 0;
-bool g_try_just_escape = 0;
-bool g_restrict_ring_injection = 1;
-bool g_forbid_from_injQueues_to_ring = 1;
-bool g_variable_threshold = 0;
+/* General parameters */
+long long g_max_cycles = 10000; /*						Maximum number of simulated cycles */
+long long g_warmup_cycles = g_max_cycles; /* 			Number of warm-up cycles; in those,
+ *														 no general statistics are collected
+ *														 (but some specific ones are) */
+long long g_injection_queue_length = 999999; /* 		Injection queue size in phits */
+long long g_local_queue_length = 10; /* 				Local link queue size in phits */
+long long g_global_queue_length = 100; /* 				Global link queue size in phits */
+long long g_out_queue_length = 10; /*					Output queue size in phits (only used
+ *														 under InputOutputQueued switch). */
+int g_ring_injection_bubble = 1; /* 					Deadlock-avoidance bubble to respect when
+ *														 injecting packets to ring (preserves
+ *														 packet advance through ring) */
+int g_p_computing_nodes_per_router = 4; /* 				Number of computing nodes ('p') per router */
+int g_a_routers_per_group = 4; /* 						Number of routers ('a') per group */
+int g_h_global_ports_per_router = 1; /* 				Number of global ports ('h') per router;
+ *														 total number of groups will be a*h+1 */
+long long g_xbar_delay = 1; /*							Delay when forwarding flit from input to
+ *														 output buffers (only with InputOutputQueueing) */
+long long g_injection_delay = 1; /* 					Delay at injection queues */
+long long g_local_link_transmission_delay = 1; /*		Flit delay end-to-end of a local link */
+long long g_global_link_transmission_delay = 1; /*		Flit delay end-to-end of a global link */
+int g_injection_channels = 1; /*						Number of VCs in injection queues; refers
+ *														 amount of generators per computing node */
+int g_local_link_channels = 1; /* 						Number of VCs in local links */
+int g_global_link_channels = 1; /* 						Number of VCs in global links */
+int g_flit_size = 1; /* 								Flit size in phits */
+int g_packet_size = 1; /* 								Packet size in phits */
+int g_injection_probability = 1; /* 					Packet injection probability at a generator.
+ *														 It ranges between 0 and 100 (it is expressed
+ *														 as a percentage). When multiplied by packet
+ *														 size and number of generators, gives total
+ *														 injection rate within the network */
+char g_output_file_name[180]; /* 						Results filename */
+long long g_seed = 1; /* 								Employed seed (to randomize simulations) */
+int g_allocator_iterations = 3; /* 						Number of (local/global) arbiter iterations
+ *														 within an allocation cycle */
+int g_local_arbiter_speedup = 1; /* 					SpeedUp within local arbiter: number of ports to
+ *														 crossbar for every input port. */
+bool g_issue_parallel_reqs = true; /*					Used in conjunction with local_arbiter_speedup,
+ *														 if set allows to make as many requests as speedup
+ *														 in a single allocation iteration */
+float g_internal_speedup = 1.0; /*						SpeedUp in router frequency: router allocation
+ *														 cycles are conducted faster and more frequently
+ *														 than simulation cycles (only with InputOutputQueueing) */
+bool g_palm_tree_configuration = 0;
+bool g_transient_stats = false; /*						Determines if temporal statistics over simulation
+ *														 time are tracked or not. Mainly related to transient
+ *														 and trace traffic. */
+
+/* General variables */
+long long g_cycle = 0; /* 								Current cycle, tracks amount of simulated cycles */
+long double g_internal_cycle = 0.0; /*					Current internal cycle, determines when switch simulation
+ *														 is conducted (only profited in InputOutputQueued switch
+ *														 with internal speedUp) */
+int g_iteration = 0; /* 								Global variable to exchange current iteration value
+ *														 between allocation operation and petition attendance */
+int g_local_router_links_offset = 0; /* 				Local links offset among router ports; followed
+ *														 port convention is:
+ *														 	computing nodes < local links < global links,
+ *														 where local links connect a router with the rest
+ *														 of routers within the same group, and global
+ *														 links connect the router with other groups */
+int g_global_router_links_offset = 0; /* 				Global links offset among router ports */
+int g_global_links_per_group = g_a_routers_per_group * g_h_global_ports_per_router; /* Convenience variable,
+ *																					 tracks amount of global
+ *																					 links per group (this is,
+ *														 							 number of groups
+ *														 							 in the network -1) */
+int g_number_switches = (g_a_routers_per_group * g_h_global_ports_per_router + 1) * g_a_routers_per_group; /* Total number of switches in the network */
+int g_number_generators = g_number_switches * g_p_computing_nodes_per_router; /* Total number of computing
+ *																				  nodes in the network */
+int g_channels = 1; /* 									Number of VCs in the network, as a max of local,
+ *														 global and injections VCs PLUS those in the escape
+ *														 subnetwork, when the latter is embedded */
+int g_flits_per_packet = 0; /* 							Packet size in flits */
+ofstream g_output_file; /* 								Results file */
+generatorModule **g_generators_list; /* 				List of generator modules */
+switchModule **g_switches_list; /* 						List of router modules */
+int g_ports = g_p_computing_nodes_per_router + g_a_routers_per_group - 1 + g_h_global_ports_per_router; /*	Number of ports per router */
+
+/* Switch type */
+SwitchType g_switch_type = BASE_SW;
+
+/* Traffic type */
+TrafficType g_traffic = UN; /* 				Traffic pattern */
+/* Adversarial traffic parameters */
+int g_adv_traffic_distance = 1; /*			Distance to the adverse traffic destination group */
+int g_adv_traffic_local_distance = 1; /*	Distance to the adverse traffic destination router */
+/* Auxiliar parameters (employed in many traffic types) */
+TrafficType *g_phase_traffic_type;
+int *g_phase_traffic_adv_dist;
+int *g_phase_traffic_percent;
+/* Transient traffic parameters */
+int g_transient_traffic_cycle = 0;
+/* All To All traffic parameters */
+int g_phases = -1;
+bool g_random_AllToAll = 0;
+/* Burst traffic parameters */
+int g_single_burst_length = 100; /* 			Burst length in flits */
+/* Bursty UN traffic parameters */
+int g_bursty_avg_length = 1; /*					Average burst size in packets */
+
+/* Routing */
+RoutingType g_routing = MIN;
+int g_ugal_local_threshold = 0;
+int g_ugal_global_threshold = 5;
+int g_piggyback_coef = 200;
+int g_th_min = 0;
+bool g_vc_misrouting_congested_restriction = false;
+int g_vc_misrouting_congested_restriction_coef_percent = 150;
+int g_vc_misrouting_congested_restriction_th = 5;
+GlobalMisroutingPolicy g_global_misrouting = CRG;
+MisroutingTrigger g_misrouting_trigger = CGA;
+bool g_relative_threshold = 0;
 int g_percent_local_threshold = 100;
 int g_percent_global_threshold = 100;
-
-unsigned int g_petitions = 0;
-unsigned int g_petitions_served = 0;
-unsigned int g_petitionsInj = 0;
-unsigned int g_petitionsInj_served = 0;
-
-generatorModule **g_generatorsList;
-switchModule **g_switchesList;
-vector<long long> g_received;
-
-vector<long long> g_sent;
-long long g_warmTotalLatency;
-long long g_warmTotalPacketLatency;
-long long g_warmTotalInjLatency;
-bool g_palm_tree_configuration = 0;
-/* Piggybaking global link states to other switches within the same group */
-bool g_piggyback = 0;
-int g_piggyback_coef = 200;
-int g_ugal_global_threshold = 5;
-int g_ugal_local_threshold = 0;
-/* Distance to the adverse traffic destination group */
-int g_traffic_adv_dist = 1;
-int g_traffic_adv_dist_local = 1;
-/* Transient traffic */
-int g_transient_traffic = 0;
-int g_transient_traffic_next_type = 3;
-int g_transient_traffic_next_dist = 4;
-int g_transient_traffic_cycle = 0;
-int g_transient_record_len = 10100;
-int g_transient_record_num_cycles = 10000;
-int g_transient_record_num_prev_cycles = 100;
-int *g_transient_record_latency;
-int *g_transient_record_num_flits;
-int *g_transient_record_num_misrouted;
-
-/* embedded ring */
-int g_embeddedRing = 0;
-int g_channels_ring = 0;
+bool g_contention_aware = false;
+int g_contention_aware_th = 3;
+int g_contention_aware_global_th = 8;
+bool g_increaseContentionAtHeader = true;
+float g_filtered_contention_regressive_coefficient = 0.5;
+DeadlockAvoidance g_deadlock_avoidance = DALLY;
+int g_rings = 0;
+int g_ringDirs = 0;
+int g_ring_ports = 0;
+bool g_onlyRing2 = 0;
+bool g_forbid_from_inj_queues_to_ring = 1;
+int g_restrictLocalCycles = 0;
 int g_globalEmbeddedRingSwitchesCount = -1;
 int g_localEmbeddedRingSwitchesCount = -1;
-/* embedded tree */
-int g_embeddedTree = 0;
-int g_channels_tree = 0;
-int g_globalEmbeddedTreeSwitchesCount = -1;
+int g_tree_root_node = -1;
+int g_tree_root_switch = -1;
 int g_localEmbeddedTreeSwitchesCount = -1;
-/* Congestion control */
-bool g_baseCongestionControl = false;
+int g_channels_escape = 0;
+CongestionManagement g_congestion_management = BCM;
 int g_baseCongestionControl_bub = 0;
-bool g_escapeCongestionControl = false;
 int g_escapeCongestion_th = 100;
+int g_forceMisrouting = 0;
+bool g_try_just_escape = 0;
 
-/* FJM free global queues */
-bool g_freeGlobalQueues = 0;
-int g_fjm_percent_free = 100;
-
-/* SM free local queues */
-bool g_freeLocalQueues = 0;
-int g_sm_percent_free = 100;
-
-/* all-to-all */
-bool g_AllToAll = 0;
-int g_phases = -1;
-bool g_naive_AllToAll = 0;
-bool g_random_AllToAll = 0;
-int g_AllToAll_generators_finished_count = 0;
-
-/* Burst traffic */
-bool g_burst = 0;
-int g_burst_length = 100; //In packets
-int g_burst_flits_length = 100; //In flits
-int *g_burst_traffic_type;
-int *g_burst_traffic_adv_dist;
-int *g_burst_traffic_type_percent;
-int g_burst_generators_finished_count = 0;
-
-//GROUP 0, per switch average latency
-long long *g_group0_totalLatency;
+/* Statistics variables */
+long double g_flit_latency = 0;
+long double g_packet_latency = 0;
+long double g_injection_queue_latency = 0;
+long double g_base_latency = 0;
+long double g_warmup_flit_latency;
+long double g_warmup_packet_latency;
+long double g_warmup_injection_latency;
+float *g_transient_record_latency;
+float *g_transient_record_injection_latency;
+long double *g_group0_totalLatency;
+long double *g_groupRoot_totalLatency;
+int g_latency_histogram_maxLat = 2000;
+long long * g_latency_histogram_no_global_misroute;
+long long * g_latency_histogram_global_misroute_at_injection;
+long long * g_latency_histogram_other_global_misroute;
+long long g_tx_flit_counter = 0;
+long long g_rx_flit_counter = 0;
+long long g_attended_flit_counter = 0;
+long long g_tx_warmup_flit_counter = 0;
+long long g_rx_warmup_flit_counter = 0;
+long long g_min_flit_counter[4] = { 0 };
+long long g_global_misrouted_flit_counter[4] = { 0 };
+long long g_global_mandatory_misrouted_flit_counter[4] = { 0 };
+long long g_local_misrouted_flit_counter[4] = { 0 };
+int *g_transient_record_flits;
+int *g_transient_record_misrouted_flits;
 long long *g_group0_numFlits;
-//GROUP ROOT, per switch average latency
-long long *g_groupRoot_totalLatency;
 long long *g_groupRoot_numFlits;
-
-long long g_maxPacketsInj = 0;
-int g_SWmaxPacketsInj = -1;
-long long g_minPacketsInj = 0;
-int g_SWminPacketsInj = -1;
-
-//Livelock control
+float *g_transient_net_injection_latency;
+float *g_transient_net_injection_inj_latency;
+int *g_transient_net_injection_flits;
+int *g_transient_net_injection_misrouted_flits;
+long long g_tx_packet_counter = 0;
+long long g_rx_packet_counter = 0;
+long long g_tx_warmup_packet_counter = 0;
+long long g_rx_warmup_packet_counter = 0;
+long long g_injected_packet_counter = 0;
+long long g_injected_bursts_counter = 0;
+long long g_total_hop_counter = 0;
+long long g_local_hop_counter = 0;
+long long g_global_hop_counter = 0;
+long long g_local_ring_hop_counter = 0;
+long long g_global_ring_hop_counter = 0;
+long long g_local_tree_hop_counter = 0;
+long long g_global_tree_hop_counter = 0;
 long long g_max_hops = 0;
 long long g_max_local_hops = 0;
 long long g_max_global_hops = 0;
+long long g_max_local_subnetwork_hops = 0;
+long long g_max_global_subnetwork_hops = 0;
 long long g_max_local_ring_hops = 0;
 long long g_max_global_ring_hops = 0;
 long long g_max_local_tree_hops = 0;
 long long g_max_global_tree_hops = 0;
+int g_hops_histogram_maxHops = 200;
+long long * g_hops_histogram;
+long long g_port_usage_counter[100];
+vector<vector<long long> > g_vc_counter;
+long long g_port_contention_counter[100];
+long long g_subnetwork_injections_counter = 0;
+long long g_root_subnetwork_injections_counter = 0;
+long long g_source_subnetwork_injections_counter = 0;
+long long g_dest_subnetwork_injections_counter = 0;
+long double g_local_contention_counter = 0;
+long double g_global_contention_counter = 0;
+long double g_local_escape_contention_counter = 0;
+long double g_global_escape_contention_counter = 0;
+unsigned int g_petitions = 0;
+unsigned int g_served_petitions = 0;
+unsigned int g_injection_petitions = 0;
+unsigned int g_served_injection_petitions = 0;
+long long g_max_injection_packets_per_sw = 0;
+int g_sw_with_max_injection_pkts = -1;
+long long g_min_injection_packets_per_sw = 0;
+int g_sw_with_min_injection_pkts = -1;
+int g_transient_record_len = 10100;
+int g_transient_record_num_cycles = 10000;
+int g_transient_record_num_prev_cycles = 100;
+int g_AllToAll_generators_finished_count = 0;
+int g_burst_generators_finished_count = 0;
 long long g_max_subnetwork_injections = 0;
 long long g_max_root_subnetwork_injections = 0;
 long long g_max_source_subnetwork_injections = 0;
 long long g_max_dest_subnetwork_injections = 0;
 
-//VC based on the fly misrouting
-bool g_vc_misrouting = 0;
-bool g_vc_misrouting_mm = 0;
-bool g_vc_misrouting_crg = 0;
-bool g_OFAR_misrouting = 0;
-bool g_OFAR_misrouting_mm = 0;
-bool g_OFAR_misrouting_crg = 0;
-/* allow local misroute in intermediate and destination groups */
-bool g_vc_misrouting_local = 0;
-bool g_OFAR_misrouting_local = 0;
-bool g_vc_misrouting_increasingVC = 0;
-
-int g_th_min = 0;
-
-//Latency histogram
-int g_latency_histogram_maxLat = 2000;
-/* Records the number of flits recieved for each latency value */
-long long * g_latency_histogram_no_global_misroute;
-long long * g_latency_histogram_global_misroute_at_injection;
-long long * g_latency_histogram_other_global_misroute;
-
-//Hops histogram
-int g_hops_histogram_maxHops = 200;
-/* Records the number of flits recieved for each hops value */
-long long * g_hops_histogram;
-
-/*
- * VC_misroute restriction: 
- * if min output is a global link, 
- * then misroute only allowed if that
- * minimal global output is congested
- */
-bool g_vc_misrouting_congested_restriction = false;
-int g_vc_misrouting_congested_restriction_coef_percent = 150;
-/* Number of flits */
-int g_vc_misrouting_congested_restriction_t = 5;
-
-/*
- * TRACES
- */
-
-int g_TRACE_SUPPORT = 0;
-long g_eventDeadlock = 0;
-long g_trace_nodes = 0;
-double g_cpuSpeed = 1e9;
+/* Traces support */
+int g_num_traces = 0;
+vector<string> g_trace_file;
+vector<string> g_pcf_file;
+vector<vector<long> > g_event_deadlock;
+vector<long> g_trace_nodes;
+vector<int> g_trace_instances;
+vector<vector<bool> > g_trace_ended;
+vector<vector<long> > g_trace_end_cycle;
+TraceAssignation g_trace_distribution = CONSECUTIVE;
+double g_cpu_speed = 1e9;
 long g_op_per_cycle = 50;
 long g_multitask = 1;
+long g_phit_size = 4; /* Phit size in bytes, for trace messages translation into simulator packets */
 bool g_cutmpi = 1;
-bool g_packet_created = 0;
 map<long, long> g_events_map;
-
-/*
- ************************************************
- *  DEBUG MODE
- ************************************************
- */
-bool g_DEBUG = false;
+map<int, TraceNodeId> g_gen_2_trace_map;
+vector<vector<vector<int> > > g_trace_2_gen_map;
