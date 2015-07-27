@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -26,7 +26,7 @@ outPort::outPort(int numVCs, int portNumber, switchModule * sw) :
 		port(numVCs, portNumber, sw) {
 	this->occupancyCredits = new int[this->numVCs];
 	this->maxCredits = new int[this->numVCs];
-	for (int i = 0; i < numVCs; i++) {
+	for (int i = 0; i < this->numVCs; i++) {
 		this->occupancyCredits[i] = 0;
 		this->maxCredits[i] = 0;
 	}

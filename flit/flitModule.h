@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -90,6 +90,7 @@ public:
 
 	void setMisrouted(bool misrouted);
 	void setMisrouted(bool misrouted, MisrouteType misroute_type);
+	bool getMisrouted() const;
 	void setBaseLatency(double base_latency);
 	double getBaseLatency() const;
 	void setCurrentMisrouteType(MisrouteType current_misroute_type);

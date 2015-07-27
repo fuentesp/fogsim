@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -67,6 +67,7 @@ public:
 	bool validMisroutePort(flitModule * flit, int outP, int nextC, double threshold, MisrouteType misroute);
 	virtual candidate enroute(flitModule * flit, int inPort, int inVC) = 0;
 	int hopsToDest(flitModule * flit, int outP);
+	int hopsToDest(int destination);
 
 private:
 	void setMinTables();

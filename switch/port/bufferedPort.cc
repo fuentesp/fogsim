@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -21,7 +21,7 @@
 #include "bufferedPort.h"
 
 bufferedPort::bufferedPort(int numVCs, int bufferNumber, int bufferCapacity, float delay, int reservedBufferCapacity) {
-	this->numVCs = g_local_link_channels + g_global_link_channels;//numVCs;
+	this->numVCs = g_local_link_channels + g_global_link_channels;
 	this->reservedBufferCapacity = reservedBufferCapacity;
 	this->aggregatedBufferCapacity = numVCs * (bufferCapacity / g_flit_size - this->reservedBufferCapacity);
 	assert(this->aggregatedBufferCapacity >= 0);
@@ -43,7 +43,7 @@ bufferedPort::~bufferedPort() {
  * in the buffer.  */
 int bufferedPort::getSpace(int vc) {
 	assert(vc >= 0);
-	if (vc >= this->numVCs) return 0; /* Little hack to avoid errors when checking unexisting buffers */
+	if (vc >= this->numVCs) return 0; /* Little hack to avoid errors when checking nonexistent buffers */
 	return vcBuffers[vc]->getSpace();
 }
 

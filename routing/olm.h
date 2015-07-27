@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -86,6 +86,14 @@ private:
 					assert(not (flit->localMisroutingDone));
 					result = GLOBAL;
 					break;
+				case NRG_L:
+				case NRG:
+					if (flit->mandatoryGlobalMisrouting_flag) {
+						assert(flit->localMisroutingDone);
+						assert((inport >= g_local_router_links_offset) && (inport < g_global_router_links_offset));
+						result = GLOBAL_MANDATORY;
+					} else if (inport < g_global_router_links_offset) result = LOCAL;
+					break;
 				case RRG_L:
 				case RRG:
 					/* Global mandatory: if previous hop has been a local misroute within source group, flit needs to be
@@ -96,9 +104,8 @@ private:
 						assert(flit->localMisroutingDone);
 						assert((inport >= g_local_router_links_offset) && (inport < g_global_router_links_offset));
 						result = GLOBAL_MANDATORY;
-					} else if (rand()
-							/ (int) (((unsigned) RAND_MAX + 1) / (g_a_routers_per_group + g_h_global_ports_per_router))
-							< g_a_routers_per_group)
+					} else if (rand() / (int) (((unsigned) RAND_MAX + 1) / (g_a_routers_per_group))
+							< g_a_routers_per_group - 1)
 						result = LOCAL;
 					else
 						result = GLOBAL;
@@ -124,8 +131,9 @@ private:
 			}
 		}
 		/* Source group is not liable to global misroute, try local */
-		else if ((g_global_misrouting == CRG_L || g_global_misrouting == RRG_L || g_global_misrouting == MM_L)
-				&& not (flit->localMisroutingDone) && not (baseRouting::minOutputPort(flit->destId) >= g_global_router_links_offset)) {
+		else if ((g_global_misrouting == CRG_L || g_global_misrouting == RRG_L || g_global_misrouting == MM_L
+				|| g_global_misrouting == NRG_L) && not (flit->localMisroutingDone)
+				&& not (baseRouting::minOutputPort(flit->destId) >= g_global_router_links_offset)) {
 			assert(not (flit->mandatoryGlobalMisrouting_flag));
 			result = LOCAL;
 		}

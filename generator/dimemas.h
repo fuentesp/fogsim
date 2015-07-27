@@ -1,7 +1,7 @@
 /*
 
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  FSIN Functional Simulator of Interconnection Networks

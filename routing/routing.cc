@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -694,7 +694,7 @@ int baseRouting::nextChannel(int inP, int outP, flitModule * flit) {
 }
 
 /*
- * Auxiliar function to determine port type. Returns a
+ * Auxiliary function to determine port type. Returns a
  * char distinguishing between 'p' (compute node),
  * 'a' (local link), 'h' (global link) or 'r' (physical
  * ring link).
@@ -716,7 +716,7 @@ char baseRouting::portType(int port) {
 }
 
 /*
- * Auxiliar function to check if a given port is eligible
+ * Auxiliary function to check if a given port is eligible
  * for misrouting (only used in certain routing mechanisms)
  */
 bool baseRouting::validMisroutePort(flitModule * flit, int outP, int nextC, double threshold, MisrouteType misroute) {
@@ -759,7 +759,7 @@ bool baseRouting::validMisroutePort(flitModule * flit, int outP, int nextC, doub
 }
 
 /*
- * Auxiliar function to determine number of hops towards destination
+ * Auxiliary function to determine number of hops towards destination
  * (under a MINIMAL path).
  */
 int baseRouting::hopsToDest(flitModule * flit, int outP) {
@@ -791,3 +791,31 @@ int baseRouting::hopsToDest(flitModule * flit, int outP) {
 
 	return path;
 }
+
+/*
+ * Auxiliary function to determine number of hops towards destination
+ * (under a MINIMAL path) for a given destination.
+ */
+int baseRouting::hopsToDest(int destination) {
+	int destSw, destGroup, outP;
+
+	destSw = int(destination / g_p_computing_nodes_per_router);
+	destGroup = int(destSw / g_a_routers_per_group);
+
+	outP = minOutputPort(destination);
+
+	if (outP < g_p_computing_nodes_per_router) return 0;
+
+	switchModule* nextSw = neighList[outP];
+	int path = 1, nextOutP = nextSw->routing->minOutputPort(destination);
+
+	while (nextSw->label != destSw) {
+		nextOutP = nextSw->routing->baseRouting::minOutputPort(destination);
+		nextSw = nextSw->routing->neighList[nextOutP];
+		path++;
+	}
+	assert(path <= 3);
+
+	return path;
+}
+

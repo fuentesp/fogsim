@@ -1,6 +1,6 @@
 /**
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  FSIN Functional Simulator of Interconnection Networks
@@ -273,10 +273,8 @@ void read_dimemas(int trace_id, vector<int> instances) {
 		cerr << "Trace file not found in current directory" << endl;
 	assert((ftrc = fopen(g_trace_file[trace_id].c_str(), "r")) != NULL);
 
-	if (fgets(buffer, BUFSIZE, ftrc) == NULL)
-		cerr << "Error accessing trace file" << endl;
-	if (strncmp("#DIMEMAS", buffer, 8))
-		cerr << "Header line is missing, maybe not a dimemas file" << endl;
+	if (fgets(buffer, BUFSIZE, ftrc) == NULL) cerr << "Error accessing trace file" << endl;
+	if (strncmp("#DIMEMAS", buffer, 8)) cerr << "Header line is missing, maybe not a dimemas file" << endl;
 	assert(!strncmp("#DIMEMAS", buffer, 8));
 
 	strtok(buffer, sep); // Drops the #DIMEMAS.
@@ -512,9 +510,9 @@ void read_dimemas(int trace_id, vector<int> instances) {
 						//coll_ev_t
 						switch (value) {
 							case 0:
-							//Execute call
+								//Execute call
 #if DEBUG
-							cout << "Executing" << mpi_type << " in task=" << mpi_task << endl;
+								cout << "Executing" << mpi_type << " in task=" << mpi_task << endl;
 #endif
 								if (task_id != mpi_task) cout << "Changed task in the middle of a collective\n" << endl;
 								if (mpi_sendsize == -1) {

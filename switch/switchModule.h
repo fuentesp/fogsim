@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -25,6 +25,7 @@
 #include "../gModule.h"
 #include "arbiter/localArbiter.h"
 #include "arbiter/globalArbiter.h"
+#include "arbiter/priorityGlobalArbiter.h"
 #include "../flit/caFlit.h"
 #include "../pbState.h"
 #include "../caHandler.h"

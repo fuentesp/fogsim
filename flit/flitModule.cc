@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -88,10 +88,12 @@ void flitModule::addHop(int outP, int swId) {
 		assert(g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING);
 		if (outP < g_global_router_links_offset) {
 			localEscapeHopCount++;
-			if (g_max_local_subnetwork_hops < localEscapeHopCount) g_max_local_subnetwork_hops = localEscapeHopCount;
+			if (g_max_local_subnetwork_hops < localEscapeHopCount) g_max_local_subnetwork_hops =
+					localEscapeHopCount;
 		} else {
 			globalEscapeHopCount++;
-			if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops = globalEscapeHopCount;
+			if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops =
+					globalEscapeHopCount;
 		}
 		return;
 	} else if (outP >= g_global_router_links_offset + g_h_global_ports_per_router) {
@@ -99,7 +101,8 @@ void flitModule::addHop(int outP, int swId) {
 		assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
 		if ((outP == g_ports - 2 && thisA == 0) || (outP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
 			globalEscapeHopCount++;
-			if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops = globalEscapeHopCount;
+			if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops =
+					globalEscapeHopCount;
 		} else {
 			localEscapeHopCount++;
 			if (g_max_local_subnetwork_hops < localEscapeHopCount) g_max_local_subnetwork_hops = localEscapeHopCount;
@@ -172,14 +175,14 @@ void flitModule::addContention(int inP, int swId) {
 }
 
 /*
- * Subtracts cycle to contention counter when a flit is
- * transmitted from a switch. Distinguishes between
- * normal and escape subnetwork counters.
+ * Subtracts cycle to contention counter when a flit is tx. from
+ * a switch. Distinguishes among normal and escape subnetwork
+ * counters.
  */
 void flitModule::subsContention(int outP, int swId) {
 	int thisA = swId % (g_a_routers_per_group);
 
-	/* First check if flit is advancing through escape subnetwork */
+	/* First check if flit is transitting through escape subnetwork */
 	if (this->channel >= g_local_link_channels) {
 		/* Embedded network */
 		assert(g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING);
@@ -262,6 +265,10 @@ double flitModule::getBaseLatency() const {
 
 void flitModule::setCurrentMisrouteType(MisrouteType current_misroute_type) {
 	this->m_current_misroute_type = current_misroute_type;
+}
+
+bool flitModule::getMisrouted() const {
+	return m_misrouted;
 }
 
 MisrouteType flitModule::getCurrentMisrouteType() const {

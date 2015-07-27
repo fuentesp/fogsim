@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -33,7 +33,6 @@ public:
 	int *inputChannels;
 	globalArbiter(int outPortNumber, int ports, switchModule *switchM);
 	~globalArbiter();
-	void reorderLRSPortList(int servedPort);
 	void initPetitions();
 	bool checkPort();
 

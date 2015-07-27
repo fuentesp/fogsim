@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -45,7 +45,7 @@ public:
 		destination = flit->destId;
 		minOutP = baseRouting::minOutputPort(destination);
 
-		/* Calculate Valiant nodevalAnytput port (&VC) */
+		/* Calculate Valiant node output port (&VC) */
 		valNode = flit->valId;
 		valOutP = baseRouting::minOutputPort(valNode);
 

@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -31,6 +31,8 @@
 #include "../routing/ugal.h"
 #include "../routing/val.h"
 #include "../routing/valAny.h"
+#include "../routing/obl.h"
+#include "../routing/srcAdp.h"
 #include "../flit/creditFlit.h"
 
 using namespace std;
@@ -99,7 +101,14 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 		case VAL_ANY:
 			this->routing = new valAny<baseRouting>(this);
 			break;
+		case OBL:
+			this->routing = new oblivious<baseRouting>(this);
+			break;
+		case SRC_ADP:
+			this->routing = new sourceAdp<baseRouting>(this);
+			break;
 		default:
+			//YET UNDEFINED!
 			assert(0);
 			break;
 	}
@@ -146,7 +155,10 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 	/* Now we can instantiate arbiters */
 	for (p = 0; p < this->portCount; p++) {
 		this->localArbiters[p] = new localArbiter(p, this);
-		this->globalArbiters[p] = new globalArbiter(p, this->portCount, this);
+		if (g_transit_priority)
+			this->globalArbiters[p] = new priorityGlobalArbiter(p, this->portCount, this);
+		else
+			this->globalArbiters[p] = new globalArbiter(p, this->portCount, this);
 	}
 }
 
@@ -315,7 +327,8 @@ void switchModule::resetCredits() {
 	 * switchId * g_p_computing_nodes_per_router (numberOfGeneratorsPerSwitch),
 	 * to find out the input port in the next switch. */
 	for (thisPort = g_p_computing_nodes_per_router; thisPort < g_global_router_links_offset; thisPort++) {
-		for (chan = 0; chan < g_local_link_channels; chan++) {
+		int numVCs = g_local_link_channels;
+		for (chan = 0; chan < numVCs; chan++) {
 			nextP = routing->neighPort[thisPort];
 			outPorts[thisPort]->setMaxOccupancy(chan,
 					routing->neighList[thisPort]->inPorts[nextP]->getBufferCapacity(chan) * g_flit_size);
@@ -324,7 +337,8 @@ void switchModule::resetCredits() {
 		}
 	}
 	for (thisPort = g_global_router_links_offset; thisPort < portCount; thisPort++) {
-		for (chan = 0; chan < g_global_link_channels; chan++) {
+		int numVCs = g_global_link_channels;
+		for (chan = 0; chan < numVCs; chan++) {
 			nextP = routing->neighPort[thisPort];
 			outPorts[thisPort]->setMaxOccupancy(chan,
 					routing->neighList[thisPort]->inPorts[nextP]->getBufferCapacity(chan) * g_flit_size);
@@ -476,7 +490,7 @@ void switchModule::action() {
 
 	updateCredits();
 
-	if (g_routing == PB || g_routing == PB_ANY) updatePb();
+	if (g_routing == PB || g_routing == PB_ANY || g_routing == SRC_ADP) updatePb();
 
 	if (g_contention_aware && g_increaseContentionAtHeader) m_ca_handler.update();
 
@@ -686,7 +700,7 @@ void switchModule::receiveCaFlit(const caFlit& flit) {
 
 /* 
  * Finds out the global link the flit would transit if
- * routed minimally, and returns true if it is congested
+ * routed minimally, and returns true if it is congested.
  */
 bool switchModule::isGlobalLinkCongested(const flitModule * flit) {
 	int globalLinkId, port, outP, dest;
@@ -867,8 +881,24 @@ void switchModule::trackConsumptionStatistics(flitModule *flitEx, int input_port
 	assert(flitExLatency == lat + g_flit_size);
 
 	/* Latency HISTOGRAM */
-	if ((g_internal_cycle >= g_warmup_cycles) & (flitExLatency < g_latency_histogram_maxLat)) {
+	if (g_internal_cycle >= g_warmup_cycles) {
 		if (flitEx->head == 1) {
+			/* If new latency value exceeds current max histogram value,
+			 * enlarge vectors to fit new values. */
+			if (flitExLatency >= g_latency_histogram_maxLat) {
+				g_latency_histogram_no_global_misroute.insert(g_latency_histogram_no_global_misroute.end(),
+						flitExLatency + 1 - g_latency_histogram_maxLat, 0);
+				g_latency_histogram_global_misroute_at_injection.insert(
+						g_latency_histogram_global_misroute_at_injection.end(),
+						flitExLatency + 1 - g_latency_histogram_maxLat, 0);
+				g_latency_histogram_other_global_misroute.insert(g_latency_histogram_other_global_misroute.end(),
+						flitExLatency + 1 - g_latency_histogram_maxLat, 0);
+				g_latency_histogram_maxLat = flitExLatency + 1;
+				assert(g_latency_histogram_no_global_misroute.size() == g_latency_histogram_maxLat);
+				assert(g_latency_histogram_global_misroute_at_injection.size() == g_latency_histogram_maxLat);
+				assert(g_latency_histogram_other_global_misroute.size() == g_latency_histogram_maxLat);
+			}
+
 			if (not (g_routing == PAR || g_routing == RLM || g_routing == OLM)) {
 				/* If NOT using vc misrouting, store all latency values in a single histogram. */
 				g_latency_histogram_other_global_misroute[int(flitExLatency)]++;

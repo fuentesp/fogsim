@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -34,21 +34,28 @@ public:
 	outPort(int numVCs, int portNumber, switchModule * sw);
 	~outPort();
 	virtual void insert(int vc, flitModule *flit, float txLength);
-	virtual int getOccupancy (int vc);
-	virtual int getTotalOccupancy (int vc);
+	virtual int getOccupancy(int vc);
+	virtual int getTotalOccupancy(int vc);
 	void setMaxOccupancy(int vc, int phits);
 	int getMaxOccupancy(int vc);
 	void increaseOccupancy(int vc, int phits);
 	void decreaseOccupancy(int vc, int phits);
 
 	/* Added for bufferedOutPort compatibility */
-	virtual void setMaxOutOccupancy(int vc, int phits){}
-	virtual int getSpace(int vc){}
-	virtual void checkFlit(int vc, flitModule* &nextFlit){}
-	virtual int getBufferOccupancy(int vc){}
-	virtual bool canSendFlit(int vc){}
-	virtual bool canReceiveFlit(int vc){}
-	virtual void reorderBuffer(int vc){}
+	virtual void setMaxOutOccupancy(int vc, int phits) {
+	}
+	virtual int getSpace(int vc) {
+	}
+	virtual void checkFlit(int vc, flitModule* &nextFlit) {
+	}
+	virtual int getBufferOccupancy(int vc) {
+	}
+	virtual bool canSendFlit(int vc) {
+	}
+	virtual bool canReceiveFlit(int vc) {
+	}
+	virtual void reorderBuffer(int vc) {
+	}
 };
 
 #endif /* OUT_PORT_H_ */

@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -82,6 +82,16 @@ void generatorModule::action() {
 		} while ((m_valiantLabel == g_number_generators)
 				|| (int(m_valiantLabel / (g_p_computing_nodes_per_router * g_a_routers_per_group))
 						== int(sourceLabel / (g_p_computing_nodes_per_router * g_a_routers_per_group))));
+		if ((g_routing == PB || g_routing == PB_ANY) && g_global_misrouting == CRG) {
+			int valOutP = (rand() / (int) (((unsigned) RAND_MAX + 1) / (g_h_global_ports_per_router)))
+					+ g_global_router_links_offset;
+			int valGroup = this->switchM->routing->neighList[valOutP]->hPos;
+			do {
+				m_valiantLabel = rand()
+						/ (int) (((unsigned) RAND_MAX + 1) / (g_p_computing_nodes_per_router * g_a_routers_per_group));
+				m_valiantLabel += valGroup * g_p_computing_nodes_per_router * g_a_routers_per_group;
+			} while (m_valiantLabel == g_number_generators);
+		}
 		flit->valId = m_valiantLabel;
 		flit->valNodeReached = 0;
 

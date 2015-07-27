@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -204,7 +204,8 @@ void ioqSwitchModule::updateOutputBuffer(int port) {
 										&& (port >= g_local_router_links_offset)
 										&& (port < g_global_router_links_offset) && (this->hPos == flit->sourceGroup)
 										&& (this->hPos != flit->destGroup) && not (flit->globalMisroutingDone)
-										&& not (output_emb_escape) && not (input_emb_escape)) {
+										&& not (output_emb_escape) && not (input_emb_escape)
+										&& not (flit->getCurrentMisrouteType() == VALIANT)) {
 									flit->mandatoryGlobalMisrouting_flag = 1;
 #if DEBUG
 									if (port == routing->minOutputPort(flit->destId))
@@ -215,13 +216,15 @@ void ioqSwitchModule::updateOutputBuffer(int port) {
 									assert(port != routing->minOutputPort(flit->destId));
 								}
 								break;
+							case NRG:
+							case NRG_L:
 							case RRG:
 							case RRG_L:
 								if (port != routing->minOutputPort(flit->destId) && inP < g_global_router_links_offset
 										&& port >= g_local_router_links_offset && (port < g_global_router_links_offset)
 										&& (this->hPos == flit->sourceGroup) && (this->hPos != flit->destGroup)
 										&& not (flit->globalMisroutingDone) && not (output_emb_escape)
-										&& not (input_emb_escape)) {
+										&& not (input_emb_escape) && not (flit->getCurrentMisrouteType() == VALIANT)) {
 									flit->mandatoryGlobalMisrouting_flag = 1;
 								}
 						}

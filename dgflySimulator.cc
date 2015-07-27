@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -25,6 +25,7 @@
 #include "generator/burstGenerator.h"
 #include "generator/traceGenerator.h"
 #include "switch/ioqSwitchModule.h"
+#include <math.h>
 #include <sstream>
 using namespace std;
 
@@ -225,6 +226,10 @@ void readConfiguration(int argc, char *argv[]) {
 	assert(config.getKeyValue("CONFIG", "PalmTreeConfiguration", value) == 0);
 	g_palm_tree_configuration = atoi(value.c_str());
 
+	if (config.getKeyValue("CONFIG", "TransitPriority", value) == 0) {
+		g_transit_priority = atoi(value.c_str());
+	}
+
 	/* Switch type */
 	if (config.getKeyValue("CONFIG", "Switch", value) == 0) {
 		readSwitchType(value.c_str(), &g_switch_type);
@@ -255,7 +260,7 @@ void readConfiguration(int argc, char *argv[]) {
 			assert(config.getKeyValue("CONFIG", "AdvTrafficLocalDistance", value) == 0);
 			g_adv_traffic_local_distance = atoi(value.c_str());
 			break;
-		case ADV_GROUP:
+		case ADVc:
 			break;
 		case MIX:
 			assert(config.getKeyValue("CONFIG", "AdvTrafficLocalDistance", value) == 0);
@@ -552,6 +557,9 @@ void readConfiguration(int argc, char *argv[]) {
 		case VAL_ANY:
 			assert(g_deadlock_avoidance == DALLY);
 			break;
+		case OBL:
+			assert(g_deadlock_avoidance == DALLY);
+			break;
 		case PAR:
 			assert(g_deadlock_avoidance == DALLY);
 			assert(config.getKeyValue("CONFIG", "MisroutingTrigger", value) == 0);
@@ -563,6 +571,7 @@ void readConfiguration(int argc, char *argv[]) {
 			assert(config.getKeyValue("CONFIG", "ugal_local_threshold", value) == 0);
 			g_ugal_local_threshold = atoi(value.c_str());
 			break;
+		case SRC_ADP:
 		case PB:
 		case PB_ANY:
 			assert(g_deadlock_avoidance == DALLY);
@@ -575,6 +584,9 @@ void readConfiguration(int argc, char *argv[]) {
 				g_ugal_local_threshold = atoi(value.c_str());
 			break;
 		case RLM:
+			assert(g_deadlock_avoidance == DALLY);
+			assert(config.getKeyValue("CONFIG", "MisroutingTrigger", value) == 0); //We need to have a misrouting trigger defined
+			break;
 		case OLM:
 			assert(g_deadlock_avoidance == DALLY);
 			assert(config.getKeyValue("CONFIG", "MisroutingTrigger", value) == 0);
@@ -589,7 +601,7 @@ void readConfiguration(int argc, char *argv[]) {
 			if (config.getKeyValue("CONFIG", "OFAR_misrouting_local", value) == 0) {
 			}
 			break;
-		default: // An unrecognized routing type should not be used */
+		default: /* An unrecognized routing type should not be used */
 			assert(0);
 			break;
 	}
@@ -738,17 +750,15 @@ void createNetwork() {
 		g_localEmbeddedRingSwitchesCount = g_number_switches; //every switch in the network has local links of the ring
 	}
 
-	g_latency_histogram_no_global_misroute = new long long[g_latency_histogram_maxLat];
-	g_latency_histogram_global_misroute_at_injection = new long long[g_latency_histogram_maxLat];
-	g_latency_histogram_other_global_misroute = new long long[g_latency_histogram_maxLat];
+	g_latency_histogram_no_global_misroute.insert(g_latency_histogram_no_global_misroute.begin(),
+			g_latency_histogram_maxLat, 0);
+	g_latency_histogram_global_misroute_at_injection.insert(g_latency_histogram_global_misroute_at_injection.begin(),
+			g_latency_histogram_maxLat, 0);
+	g_latency_histogram_other_global_misroute.insert(g_latency_histogram_other_global_misroute.begin(),
+			g_latency_histogram_maxLat, 0);
 
 	g_hops_histogram = new long long[g_hops_histogram_maxHops];
 
-	for (i = 0; i < g_latency_histogram_maxLat; i++) {
-		g_latency_histogram_no_global_misroute[i] = 0;
-		g_latency_histogram_global_misroute_at_injection[i] = 0;
-		g_latency_histogram_other_global_misroute[i] = 0;
-	}
 	for (i = 0; i < g_hops_histogram_maxHops; i++) {
 		g_hops_histogram[i] = 0;
 	}
@@ -1062,7 +1072,7 @@ void action() {
 					if (g_switches_list[i]->messagesInQueuesCounter >= 1) {
 						g_switches_list[i]->action();
 					} else {
-						if (g_routing == PB || g_routing == PB_ANY) {
+						if (g_routing == PB || g_routing == PB_ANY || g_routing == SRC_ADP) {
 							g_switches_list[i]->updateReadPb();
 						}
 						if (g_contention_aware) {
@@ -1160,6 +1170,7 @@ void writeOutput() {
 	}
 
 	g_output_file << "Arbiter Iterations: " << g_allocator_iterations << endl;
+	g_output_file << "Transit Priority: " << g_transit_priority << endl;
 	g_output_file << "Injection Delay: " << g_injection_delay << endl;
 	g_output_file << "Local Link Delay: " << g_local_link_transmission_delay << endl;
 	g_output_file << "Global Link Delay: " << g_global_link_transmission_delay << endl;
@@ -1167,7 +1178,6 @@ void writeOutput() {
 	g_output_file << "Flit Size (in phits): " << g_flit_size << endl;
 	g_output_file << "Packet Size (in Flits): " << g_flits_per_packet << endl;
 	g_output_file << "Generator Queue Length: " << g_injection_queue_length << endl;
-	g_output_file << "Buffer: SEPARATED" << endl;
 	g_output_file << "Local Queue Length: " << g_local_queue_length << " (phits per vc)" << endl;
 	g_output_file << "Global Queue Length: " << g_global_queue_length << " (phits per vc)" << endl;
 	g_output_file << "VCs: " << g_channels << endl;
@@ -1199,8 +1209,8 @@ void writeOutput() {
 			g_output_file << "Traffic: ADV_LOCAL" << endl;
 			g_output_file << "Adversarial Traffic Distance: " << g_adv_traffic_distance << endl;
 			break;
-		case ADV_GROUP:
-			g_output_file << "Traffic: ADV_GROUP" << endl;
+		case ADVc:
+			g_output_file << "Traffic: ADVc" << endl;
 			break;
 		case ALL2ALL:
 			g_output_file << "Traffic: ALL2ALL" << endl;
@@ -1334,6 +1344,15 @@ void writeOutput() {
 		case VAL_ANY:
 			g_output_file << "Routing: VAL_ANY" << endl;
 			break;
+		case OBL:
+			g_output_file << "Routing: OBL" << endl;
+			break;
+		case SRC_ADP:
+			g_output_file << "Routing: SRC_ADP" << endl;
+			g_output_file << "Piggybacking Coef: " << g_piggyback_coef << endl;
+			g_output_file << "UGAL Local Threshold: " << g_ugal_local_threshold << endl;
+			g_output_file << "UGAL Global Threshold: " << g_ugal_global_threshold << endl;
+			break;
 		case PAR:
 			g_output_file << "Routing: PAR" << endl;
 			g_output_file << "Local Threshold Percent: " << g_percent_local_threshold << endl;
@@ -1348,10 +1367,14 @@ void writeOutput() {
 		case PB:
 			g_output_file << "Routing: PB" << endl;
 			g_output_file << "Piggybacking Coef: " << g_piggyback_coef << endl;
+			g_output_file << "UGAL Local Threshold: " << g_ugal_local_threshold << endl;
+			g_output_file << "UGAL Global Threshold: " << g_ugal_global_threshold << endl;
 			break;
 		case PB_ANY:
 			g_output_file << "Routing: PB_ANY" << endl;
 			g_output_file << "Piggybacking Coef: " << g_piggyback_coef << endl;
+			g_output_file << "UGAL Local Threshold: " << g_ugal_local_threshold << endl;
+			g_output_file << "UGAL Global Threshold: " << g_ugal_global_threshold << endl;
 			break;
 		case RLM:
 			g_output_file << "Routing: RLM" << endl;
@@ -1576,6 +1599,14 @@ void writeOutput() {
 			<< g_warmup_injection_latency << ")" << endl;
 	g_output_file << "Base Latency: " << g_base_latency << endl;
 	g_output_file << "Average Total Latency: " << (g_flit_latency - g_warmup_flit_latency) / receivedFlitCount << endl;
+	for (i = 0; i < g_latency_histogram_maxLat; i++) {
+		if (g_latency_histogram_no_global_misroute[i] + g_latency_histogram_global_misroute_at_injection[i]
+				+ g_latency_histogram_other_global_misroute[i] > 0) {
+			g_output_file << "Min Total Latency: " << i << endl;
+			break;
+		}
+	}
+	g_output_file << "Max Total Latency: " << g_latency_histogram_maxLat - 1 << endl;
 	g_output_file << "Average Total Packet Latency: "
 			<< (g_packet_latency - g_warmup_packet_latency) / receivedPacketCount << endl;
 	g_output_file << "Average Inj Latency: "
@@ -1671,11 +1702,12 @@ void writeOutput() {
 						/ g_injection_queue_length << "\%)" << endl;
 		g_output_file << "Local Queues Occupancy: "
 				<< LQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
-				<< ((float) 100.0 * LQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches)) / g_local_queue_length
-				<< "\%)" << endl;
+				<< ((float) 100.0 * LQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
+						/ g_local_queue_length << "\%)" << endl;
 		g_output_file << "Global Queues Occupancy: "
 				<< GQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
-				<< ((float) 100.0 * GQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches)) / g_global_queue_length
+				<< ((float) 100.0 * GQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
+						/ g_global_queue_length
 				<< "\%)" << endl;
 
 		switch (g_deadlock_avoidance) {
@@ -1708,11 +1740,19 @@ void writeOutput() {
 
 	g_output_file << endl;
 	g_output_file << "Max Injections: " << g_max_injection_packets_per_sw << endl;
-	g_output_file << "Switch Max Injections: " << g_sw_with_max_injection_pkts << endl;
+	g_output_file << "Switch With Max Injections: " << g_sw_with_max_injection_pkts << endl;
 	g_output_file << "Min Injections: " << g_min_injection_packets_per_sw << endl;
-	g_output_file << "Switch Min Injections: " << g_sw_with_min_injection_pkts << endl;
-	g_output_file << "Unbalance Coef: " << (float) 1.0 * g_max_injection_packets_per_sw / g_min_injection_packets_per_sw
-			<< endl << endl;
+	g_output_file << "Switch With Min Injections: " << g_sw_with_min_injection_pkts << endl;
+	g_output_file << "Unbalance Quotient: "
+			<< (float) 1.0 * g_max_injection_packets_per_sw / g_min_injection_packets_per_sw << endl;
+	double sum = 0, sqsum = 0;
+	for (i = 0; i < g_number_switches; i++) {
+		sum += g_switches_list[i]->packetsInj;
+		sqsum += pow(g_switches_list[i]->packetsInj, 2);
+	}
+	double mean = sum / g_number_switches;
+	double stdev = sqrt(sqsum / g_number_switches - pow(mean, 2));
+	g_output_file << "Unfairness Quotient (stdev/avg): " << stdev / mean << endl << endl;
 
 	/* Group 0 and tree root group (if deadlock avoidance mechanism is an embedded tree)
 	 * latency statistics per switch. */
@@ -1774,9 +1814,9 @@ void freeMemory() {
 	delete[] g_groupRoot_numFlits;
 	delete[] g_groupRoot_totalLatency;
 
-	delete[] g_latency_histogram_no_global_misroute;
-	delete[] g_latency_histogram_global_misroute_at_injection;
-	delete[] g_latency_histogram_other_global_misroute;
+	g_latency_histogram_no_global_misroute.clear();
+	g_latency_histogram_global_misroute_at_injection.clear();
+	g_latency_histogram_other_global_misroute.clear();
 
 	delete[] g_hops_histogram;
 
@@ -2012,7 +2052,7 @@ void readTrafficPattern(const char * traffic_name, TrafficType * var) {
 	READ_ENUM(traffic_name, ADV) else
 	READ_ENUM(traffic_name, ADV_RANDOM_NODE) else
 	READ_ENUM(traffic_name, ADV_LOCAL) else
-	READ_ENUM(traffic_name, ADV_GROUP) else
+	READ_ENUM(traffic_name, ADVc) else
 	READ_ENUM(traffic_name, SINGLE_BURST) else
 	READ_ENUM(traffic_name, ALL2ALL) else
 	READ_ENUM(traffic_name, MIX) else
@@ -2029,6 +2069,8 @@ void readRoutingType(const char * routing_type, RoutingType * var) {
 	READ_ENUM(routing_type, MIN_COND) else
 	READ_ENUM(routing_type, VAL) else
 	READ_ENUM(routing_type, VAL_ANY) else
+	READ_ENUM(routing_type, OBL) else
+	READ_ENUM(routing_type, SRC_ADP) else
 	READ_ENUM(routing_type, PAR) else
 	READ_ENUM(routing_type, UGAL) else
 	READ_ENUM(routing_type, PB) else
@@ -2044,6 +2086,8 @@ void readRoutingType(const char * routing_type, RoutingType * var) {
 void readGlobalMisrouting(const char * global_misrouting, GlobalMisroutingPolicy * var) {
 	READ_ENUM(global_misrouting, CRG) else
 	READ_ENUM(global_misrouting, CRG_L) else
+	READ_ENUM(global_misrouting, NRG) else
+	READ_ENUM(global_misrouting, NRG_L) else
 	READ_ENUM(global_misrouting, RRG) else
 	READ_ENUM(global_misrouting, RRG_L) else
 	READ_ENUM(global_misrouting, MM) else

@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -42,12 +42,24 @@ public:
 	void setMaxOutOccupancy(int vc, int phits);
 	int getMaxOutOccupancy(int vc);
 
-	inline int getSpace(int vc){return this->bufferedPort::getSpace(vc);}
-	inline void checkFlit(int vc, flitModule* &nextFlit){this->bufferedPort::checkFlit(vc, nextFlit);}
-	inline int getBufferOccupancy(int vc){return this->bufferedPort::getBufferOccupancy(vc);}
-	inline bool canSendFlit(int vc){return this->bufferedPort::canSendFlit(vc);}
-	inline bool canReceiveFlit(int vc){return this->bufferedPort::canReceiveFlit(vc);}
-	inline void reorderBuffer(int vc){this->bufferedPort::reorderBuffer(vc);}
+	inline int getSpace(int vc) {
+		return this->bufferedPort::getSpace(vc);
+	}
+	inline void checkFlit(int vc, flitModule* &nextFlit) {
+		this->bufferedPort::checkFlit(vc, nextFlit);
+	}
+	inline int getBufferOccupancy(int vc) {
+		return this->bufferedPort::getBufferOccupancy(vc);
+	}
+	inline bool canSendFlit(int vc) {
+		return this->bufferedPort::canSendFlit(vc);
+	}
+	inline bool canReceiveFlit(int vc) {
+		return this->bufferedPort::canReceiveFlit(vc);
+	}
+	inline void reorderBuffer(int vc) {
+		this->bufferedPort::reorderBuffer(vc);
+	}
 };
 
 #endif /* BUFFERED_PORT_H_ */

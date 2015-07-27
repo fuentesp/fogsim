@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -77,18 +77,19 @@ int steadyTraffic::setDestination(TrafficType type) {
 				destSwitch = this->hPos * g_a_routers_per_group + destSwOffset;
 				break;
 
-			case ADV_GROUP:
-				/* Adversarial group traffic pattern: destination group is randomly selected
-				 * among those linked to source router. Destination router is randomly chosen
+			case ADVc:
+				/* Adversarial consecutive group traffic pattern: destination group is randomly
+				 * selected among those linked to source router (in the palmtree layout, these are
+				 * the +1,+2...+h consecutive groups). Destination router is randomly chosen
 				 * amidst destination group. */
 				int group_dist;
 				do {
 					destSwOffset = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_a_routers_per_group));
 				} while (destSwOffset >= g_a_routers_per_group);
 				do {
-					group_dist = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_h_global_ports_per_router));
-				} while (group_dist >= g_h_global_ports_per_router);
-				destGroup = module((this->hPos + group_dist), groups);
+					group_dist = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_h_global_ports_per_router - 1));
+				} while (group_dist >= g_h_global_ports_per_router - 1);
+				destGroup = module((this->hPos + group_dist + 1), groups);
 				destSwitch = destGroup * g_a_routers_per_group + destSwOffset;
 				break;
 

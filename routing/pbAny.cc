@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -119,22 +119,32 @@ int pbAny::nominateCandidates(flitModule * flit, int inPort, int minOutP, double
 
 int pbAny::nextChannel(int inP, int outP, flitModule * flit) {
 	char outType, inType;
-	int next_channel, i, inVC = flit->channel;
+	int next_channel, i, index, inVC = flit->channel;
 
 	inType = portType(inP);
 	outType = portType(outP);
-	char vcOrder[] = { 'a', 'h', 'a', 'a', 'h', 'a' };
+	char vcTypeOrder[] = { 'a', 'h', 'a', 'a', 'h', 'a' };
+	int vcOrder[] = { 0, 0, 1, 2, 1, 3 };
 
-	if (outType == 'p') next_channel = inVC;
-	if (inType == 'p') inVC = -1;
-
-	for (i = inVC + 1; i < g_local_link_channels + g_global_link_channels; i++) {
-		if (outType == vcOrder[i]) {
-			next_channel = i;
+	if (inType == 'p')
+		index = -1;
+	else {
+		for (i = 0; i < g_local_link_channels + g_global_link_channels; i++) {
+			if (inType == vcTypeOrder[i] && inVC == vcOrder[i]) {
+				index = i;
+				break;
+			}
+		}
+	}
+	for (i = index + 1; i < g_local_link_channels + g_global_link_channels; i++) {
+		if (outType == vcTypeOrder[i]) {
+			next_channel = vcOrder[i];
 			break;
 		}
 	}
 
-	assert(next_channel < g_local_link_channels + g_global_link_channels);
+	if (outType == 'p') next_channel = inVC;
+	assert(next_channel < g_channels);
+
 	return (next_channel);
 }

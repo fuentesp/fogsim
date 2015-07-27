@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -70,6 +70,9 @@ bool g_issue_parallel_reqs = true; /*					Used in conjunction with local_arbiter
 float g_internal_speedup = 1.0; /*						SpeedUp in router frequency: router allocation
  *														 cycles are conducted faster and more frequently
  *														 than simulation cycles (only with InputOutputQueueing) */
+bool g_transit_priority = true; /*						Transit traffic priority over injection at the global
+ *														 (output) arbiter: gives preference to transit (local
+ *														 or global link) queues over injection. */
 bool g_palm_tree_configuration = 0;
 bool g_transient_stats = false; /*						Determines if temporal statistics over simulation
  *														 time are tracked or not. Mainly related to transient
@@ -114,7 +117,7 @@ TrafficType g_traffic = UN; /* 				Traffic pattern */
 /* Adversarial traffic parameters */
 int g_adv_traffic_distance = 1; /*			Distance to the adverse traffic destination group */
 int g_adv_traffic_local_distance = 1; /*	Distance to the adverse traffic destination router */
-/* Auxiliar parameters (employed in many traffic types) */
+/* Auxiliary parameters (employed in many traffic types) */
 TrafficType *g_phase_traffic_type;
 int *g_phase_traffic_adv_dist;
 int *g_phase_traffic_percent;
@@ -178,10 +181,10 @@ float *g_transient_record_latency;
 float *g_transient_record_injection_latency;
 long double *g_group0_totalLatency;
 long double *g_groupRoot_totalLatency;
-int g_latency_histogram_maxLat = 2000;
-long long * g_latency_histogram_no_global_misroute;
-long long * g_latency_histogram_global_misroute_at_injection;
-long long * g_latency_histogram_other_global_misroute;
+int g_latency_histogram_maxLat = 1;
+vector<long long> g_latency_histogram_no_global_misroute;
+vector<long long> g_latency_histogram_global_misroute_at_injection;
+vector<long long> g_latency_histogram_other_global_misroute;
 long long g_tx_flit_counter = 0;
 long long g_rx_flit_counter = 0;
 long long g_attended_flit_counter = 0;

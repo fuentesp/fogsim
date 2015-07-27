@@ -1,6 +1,6 @@
 /*
  FOGSim, simulator for interconnection networks.
- https://code.google.com/p/fogsim/
+ http://fuentesp.github.io/fogsim/
  Copyright (C) 2015 University of Cantabria
 
  This program is free software; you can redistribute it and/or
@@ -81,6 +81,9 @@ extern bool g_issue_parallel_reqs; /*					Used in conjunction with local_arbiter
 extern float g_internal_speedup; /*						SpeedUp in router frequency: router allocation
  *														 cycles are conducted faster and more frequently
  *														 than simulation cycles (only with InputOutputQueueing) */
+extern bool g_transit_priority; /*						Transit traffic priority over injection at the global
+ *														 (output) arbiter: gives preference to transit (local
+ *														 or global link) queues over injection. */
 extern bool g_palm_tree_configuration;
 extern bool g_transient_stats; /*						Determines if temporal statistics over simulation
  *														 time are tracked or not. Mainly related to transient
@@ -151,11 +154,11 @@ extern SwitchType g_switch_type;
  * -LOCAL ADVERSARIAL: all nodes in a router
  * 			send their traffic to nodes in
  * 			the same neighbor router
- * -GROUP ADVERSARIAL: all nodes in a group
- * 			send their traffic to groups
+ * -ADVERSARIAL Consecutive: all nodes in a
+ * 			group send their traffic to groups
  * 			linked to the same local neighbor
  * 			router (this is roughly equivalent
- * 			to a mixed ADV+1,+2,..+H
+ * 			to a mixed ADV+1,+2,..+H)
  * -ALL-TO-ALL
  * -MIX: COMBINATION OF RANDOM, LOCAL
  * 			ADVERSARIAL & GLOBAL ADVERSARIAL
@@ -177,7 +180,7 @@ extern SwitchType g_switch_type;
  * -TRACE: support for trace simulations.
  */
 enum TrafficType {
-	UN, ADV, ADV_RANDOM_NODE, ADV_LOCAL, ADV_GROUP, ALL2ALL, MIX, TRANSIENT, SINGLE_BURST, BURSTY_UN, TRACE
+	UN, ADV, ADV_RANDOM_NODE, ADV_LOCAL, ADVc, ALL2ALL, MIX, TRANSIENT, SINGLE_BURST, BURSTY_UN, TRACE
 };
 
 extern TrafficType g_traffic;
@@ -233,6 +236,16 @@ enum MisrouteType {
  * 		allowing any node to be selected as intermediate
  * 		misrouting node, instead of restricting to a random
  * 		other-group. BEWARE!, source group nodes are not eligible.
+ * -OBL: OBLivious non-minimal routing, chooses a
+ * 		random path across an intermediate group linked to
+ * 		the source router or a neighbor router in the source
+ * 		group, depending on the global misrouting policy.
+ * -SRC_ADP: SouRCe ADaPtive non-minimal routing,
+ * 		selects between the minimal and a non-minimal path
+ * 		at injection based on the occupancy of remote queues
+ * 		(in a congestion-based PiggyBackin-alike misrouting
+ * 		trigger). Misrouting path depends on the global
+ * 		misrouting policy in use.
  * -PAR: Progressive Adaptive Routing, ?????
  * 		Needs DALLY as deadlock avoidance mechanism.
  * -UGAL: Universal Globally-Adaptive Load-balanced
@@ -260,7 +273,7 @@ enum MisrouteType {
  *
  */
 enum RoutingType {
-	MIN, MIN_COND, VAL, VAL_ANY, PAR, UGAL, PB, PB_ANY, OFAR, RLM, OLM
+	MIN, MIN_COND, VAL, VAL_ANY, OBL, SRC_ADP, PAR, UGAL, PB, PB_ANY, OFAR, RLM, OLM
 };
 
 extern RoutingType g_routing;
@@ -299,7 +312,7 @@ extern int g_vc_misrouting_congested_restriction_th; /* 		VC Misrouting addition
  * 		NRG at transit.
  */
 enum GlobalMisroutingPolicy {
-	CRG, CRG_L, RRG, RRG_L, NRG, MM, MM_L
+	CRG, CRG_L, RRG, RRG_L, NRG, NRG_L, MM, MM_L
 };
 
 extern GlobalMisroutingPolicy g_global_misrouting;
@@ -437,9 +450,9 @@ extern long double *g_group0_totalLatency;	//Group 0, per switch average latency
 extern long double *g_groupRoot_totalLatency;	//Root group, per switch average latency
 //Latency histogram
 extern int g_latency_histogram_maxLat;
-extern long long * g_latency_histogram_no_global_misroute;
-extern long long * g_latency_histogram_global_misroute_at_injection;
-extern long long * g_latency_histogram_other_global_misroute;
+extern vector<long long> g_latency_histogram_no_global_misroute;
+extern vector<long long> g_latency_histogram_global_misroute_at_injection;
+extern vector<long long> g_latency_histogram_other_global_misroute;
 
 /* Transmitted and received flits*/
 extern long long g_tx_flit_counter;
