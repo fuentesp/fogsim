@@ -8,19 +8,19 @@ FOGSim models dragonfly interconnection networks using synthetic traffic pattern
 Please see the [wiki](https://code.google.com/p/fogsim/w/list) for a description of the simulator design and its basic use.
 
 ## Developers and maintainers ##
-FOGSim has been developed mainly by Marina García, Miguel Odriozola and Pablo Fuentes, under the supervision of [Enrique Vallejo](http://personales.unican.es/vallejoe/) and Ramón Beivide.
+FOGSim has been developed mainly by Marina García, Miguel Odriozola, Mariano Benito and Pablo Fuentes, under the supervision of [Enrique Vallejo](http://personales.unican.es/vallejoe/) and Ramón Beivide. Additional contributions have been received from [Cristóbal Camarero](http://personales.unican.es/camareroc/).
 
-The current maintainer is Pablo Fuentes, under the supervision of [Enrique Vallejo](http://personales.unican.es/vallejoe/) and Ramón Beivide.
-
-Additional contributions have been received from [Cristóbal Camarero](http://personales.unican.es/camareroc/).
+Current maintainers are Mariano Benito and Pablo Fuentes.
 
 ## Publications using FOGSim ##
 The following list of publications employed FOGSim to obtain performance results:
 
-  * _On-the-Fly Adaptive Routing in High-Radix Hierarchical Networks_. M. García, E. Vallejo, R. Beivide, M. Odriozola, C. Camarero, M. Valero, G. Rodríguez, J. Labarta and C. Minkenberg. International Conference on Parallel Processing (ICPP-41), 2012. (Best paper).
-  * _Global Misrouting Policies in Two-level Hierarchical Networks_. M. García, E. Vallejo, R. Beivide, M. Odriozola, C. Camarero, M. Valero, G. Rodriguez, J. Labarta. International Workshop on Interconnection Network Architecture: On-Chip, Multi-Chip (INA-OCMC), 2013.
-  * _OFAR-CM: Efficient Dragonfly Networks with Simple Congestion Management_. M. García, E. Vallejo, R. Beivide, M. Valero, G. Rodríguez. Symposium on High-Performance Interconnects (HOTI-21), 2013.
-  * _Efficient Routing Mechanisms for Dragonfly Networks_. M. García, E. Vallejo, R. Beivide, M. Odriozola, M. Valero. International Conference on Parallel Processing (ICPP-42), 2013.
-  * _On the use of contention information for adaptive routing_. P. Fuentes, E. Vallejo, M. García, R. Beivide. International Summer School on Advanced Computer Architecture and Compilation for Embedded Systems (ACACES-10), 2014.
+  * _On-the-Fly Adaptive Routing in High-Radix Hierarchical Networks_. M. García, E. Vallejo, R. Beivide, M. Odriozola, C. Camarero, M. Valero, G. Rodríguez, J. Labarta, and C. Minkenberg. International Conference on Parallel Processing (ICPP-41), 2012. (Best paper).
+  * _Global Misrouting Policies in Two-level Hierarchical Networks_. M. García, E. Vallejo, R. Beivide, M. Odriozola, C. Camarero, M. Valero, G. Rodriguez, and J. Labarta. International Workshop on Interconnection Network Architecture: On-Chip, Multi-Chip (INA-OCMC), 2013.
+  * _OFAR-CM: Efficient Dragonfly Networks with Simple Congestion Management_. M. García, E. Vallejo, R. Beivide, M. Valero, and G. Rodríguez. Symposium on High-Performance Interconnects (HOTI-21), 2013.
+  * _Efficient Routing Mechanisms for Dragonfly Networks_. M. García, E. Vallejo, R. Beivide, M. Odriozola, and M. Valero. International Conference on Parallel Processing (ICPP-42), 2013.
+  * _On the use of contention information for adaptive routing_. P. Fuentes, E. Vallejo, M. García, and R. Beivide. International Summer School on Advanced Computer Architecture and Compilation for Embedded Systems (ACACES-10), 2014.
   * _On-the-Fly Adaptive Routing for dragonfly interconnection networks_. M. García, E. Vallejo, R. Beivide, C. Camarero, M. Valero, G. Rodríguez, and C. Minkenberg. The Journal of Supercomputing, 2014.
-  * _Contention-based Nonminimal Adaptive Routing in High-radix Networks_. P. Fuentes, E. Vallejo, M. García, R. Beivide, G. Rodríguez, C. Minkenberg and M. Valero. International Parallel & Distributed Processing Symposium (IPDPS), 2015.
+  * _Contention-based Nonminimal Adaptive Routing in High-radix Networks_. P. Fuentes, E. Vallejo, M. García, R. Beivide, G. Rodríguez, C. Minkenberg, and M. Valero. International Parallel & Distributed Processing Symposium (IPDPS), 2015.
+  * _Throughput Unfairness in Dragonfly Networks under Realistic Traffic Patterns_. P. Fuentes, E. Vallejo, C. Camarero, R. Beivide, and M. Valero. 1st IEEE International Workshop on High-Performance Interconnection Networks Towards the Exascale and Big-Data Era (HiPINEB), 2015.
+  * _On the Use of Commodity Ethernet Technology in Exascale HPC Systems_. M. Benito, E. Vallejo, and R. Beivide. IEEE International Conference on High Performance Computing (HiPC), 2015.
