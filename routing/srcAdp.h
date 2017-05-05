@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,18 +22,120 @@
 #define class_sourceAdp
 
 #include "routing.h"
+#include "flexibleRouting.h"
 
 template<class base>
 class sourceAdp: public base {
 protected:
+	int ***lastValNodeSet;
 
 public:
 
 	sourceAdp(switchModule *switchM) :
 			base(switchM) {
+		const int minLocalVCs = 4, minGlobalVCs = 2;
+		int petLocalVCs = g_local_link_channels - g_local_res_channels;
+		int petGlobalVCs = g_global_link_channels - g_global_res_channels;
 		assert(g_deadlock_avoidance == DALLY); // Sanity check
-		assert(g_local_link_channels >= 4 && g_global_link_channels >= 2);
-		int vc;
+		assert(g_local_link_channels >= minLocalVCs && g_global_link_channels >= minGlobalVCs);
+		assert(petLocalVCs >= minLocalVCs && petGlobalVCs >= minGlobalVCs);
+		if (g_vc_usage == FLEXIBLE) {
+			int vc;
+			/* Fill in VC arrays */
+			if (g_global_link_channels > minGlobalVCs) {
+				for (vc = petLocalVCs - minLocalVCs;
+						vc <= (petLocalVCs - minLocalVCs) + (petGlobalVCs - minGlobalVCs) - 1; vc++) {
+					baseRouting::globalVc.push_back(vc);
+				}
+			}
+			baseRouting::globalVc.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::globalVc.push_back(petLocalVCs + petGlobalVCs - 2);
+			if (petLocalVCs > minLocalVCs) {
+				for (vc = 0; vc <= petLocalVCs - minLocalVCs - 1; vc++) {
+					baseRouting::localVcSource.push_back(vc);
+					baseRouting::localVcInter.push_back(vc);
+					baseRouting::localVcDest.push_back(vc);
+				}
+			}
+			/* We include an additional VC value in source array to fix 2 cases:
+			 A) Inter group is src group, to distinguish between minimal and misroute hop;
+			 B) Inter group is dest group, so local hop in source group is minimal. */
+			baseRouting::localVcSource.push_back(petLocalVCs + petGlobalVCs - 6);
+			baseRouting::localVcSource.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcInter.push_back(petLocalVCs + petGlobalVCs - 6);
+			baseRouting::localVcInter.push_back(petLocalVCs + petGlobalVCs - 4);
+			baseRouting::localVcInter.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 6);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 4);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 1);
+
+			assert(baseRouting::globalVc.size() == petGlobalVCs);
+			assert(baseRouting::localVcSource.size() == petLocalVCs - 2);
+			assert(baseRouting::localVcInter.size() == petLocalVCs - 1);
+			assert(baseRouting::localVcDest.size() == petLocalVCs);
+
+			if (g_reactive_traffic) {
+				/* Under Flexible VC usage, response messages can use both its
+				 * reserved VCs plus those of the petitions. Although for the
+				 * petition path we need 4/2 VCs, for responses we assume a
+				 * minimum of 2/1 additional VCs (to ensure upwards VC path) */
+				const int minLocalResVCs = 2, minGlobalResVCs = 1;
+				assert(g_local_res_channels >= minLocalResVCs && g_global_res_channels >= minGlobalResVCs);
+				baseRouting::globalResVc = baseRouting::globalVc;
+				if (g_global_res_channels > minGlobalResVCs) {
+					for (vc = g_local_link_channels - minLocalResVCs + petGlobalVCs;
+							vc <= g_local_link_channels - minLocalResVCs + g_global_link_channels - minGlobalResVCs - 1;
+							vc++) {
+						baseRouting::globalResVc.push_back(vc);
+					}
+				}
+				baseRouting::globalResVc.push_back(g_local_link_channels + g_global_link_channels - 2);
+				baseRouting::localResVcSource = baseRouting::localVcInter;
+				baseRouting::localResVcInter = baseRouting::localVcDest;
+				baseRouting::localResVcDest = baseRouting::localVcDest;
+				if (g_local_res_channels > minLocalResVCs) {
+					for (vc = petLocalVCs + petGlobalVCs;
+							vc <= g_local_link_channels - minLocalResVCs + petGlobalVCs - 1; vc++) {
+						baseRouting::localResVcSource.push_back(vc);
+						baseRouting::localResVcInter.push_back(vc);
+						baseRouting::localResVcDest.push_back(vc);
+					}
+				}
+				baseRouting::localResVcSource.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcInter.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcDest.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcDest.push_back(g_local_link_channels + g_global_link_channels - 1);
+
+				assert(baseRouting::globalResVc.size() == g_global_link_channels);
+				assert(baseRouting::localResVcSource.size() == g_local_link_channels - 2);
+				assert(baseRouting::localResVcInter.size() == g_local_link_channels - 1);
+				assert(baseRouting::localResVcDest.size() == g_local_link_channels);
+			}
+		} else if (g_vc_usage == BASE) {
+			/* Remove default VC and port type ordering to replace with specific for oblivious routing */
+			baseRouting::typeVc.clear();
+			baseRouting::petitionVc.clear();
+			baseRouting::responseVc.clear();
+			char aux[] = { 'a', 'h', 'a', 'a', 'h', 'a' };
+			baseRouting::typeVc.insert(baseRouting::typeVc.begin(), aux, aux + 6);
+			int aux2[] = { 0, 0, 1, 2, 1, 3 };
+			baseRouting::petitionVc.insert(baseRouting::petitionVc.begin(), aux2, aux2 + 6);
+			if (g_reactive_traffic) {
+				assert(g_local_link_channels >= 2 * minLocalVCs && g_global_link_channels >= 2 * minGlobalVCs);
+				int aux3[] = { 4, 2, 5, 6, 3, 7 };
+				baseRouting::responseVc.insert(baseRouting::responseVc.begin(), aux3, aux3 + 6);
+			}
+		}
+		lastValNodeSet = new int **[baseRouting::portCount];
+		for (int port = 0; port < baseRouting::portCount; port++) {
+			lastValNodeSet[port] = new int*[g_cos_levels];
+			for (int cos = 0; cos < g_cos_levels; cos++) {
+				lastValNodeSet[port][cos] = new int[g_channels];
+				for (int vc = 0; vc < g_channels; vc++)
+					lastValNodeSet[port][cos][vc] = -1;
+			}
+		}
 	}
 	~sourceAdp() {
 	}
@@ -48,7 +150,8 @@ public:
 		intNode = flit->valId;
 
 		/* When injecting determine the intermediate node to be used */
-		if (inPort < g_p_computing_nodes_per_router && not (flit->getMisrouted())) {
+		if (inPort < g_p_computing_nodes_per_router
+				&& (g_reset_val || lastValNodeSet[inPort][flit->cos][inVC] != flit->flitId)) {
 			/* Calculate non-minimal output port: select between neighbor or remote intermediate group */
 			minOutVC = -1; /* Since it is not used in the misrouteType() function, we introduce a non-valid value */
 			misroute = this->misrouteType(inPort, inVC, flit, minOutP, minOutVC);
@@ -78,9 +181,9 @@ public:
 			intSW = rand() % g_a_routers_per_group + intGroup * g_a_routers_per_group;
 			assert(intSW < g_number_switches);
 			intNode = rand() % g_p_computing_nodes_per_router + intSW * g_p_computing_nodes_per_router;
-			assert(intNode < g_number_generators);
+			assert(0 < intNode < g_number_generators);
 			flit->valId = intNode;
-			flit->setMisrouted(true, VALIANT);
+			lastValNodeSet[inPort][flit->cos][inVC] = flit->flitId;
 
 			/* Calculate non-minimal path length */
 			int nonMinPathLength = 1;
@@ -93,8 +196,6 @@ public:
 			nonMinPathLength += sw->routing->hopsToDest(flit->destId);
 			if (nonMinPathLength == 6) nonMinPathLength--;
 			flit->valPathLength = nonMinPathLength;
-			/* Sanity check to ensure flit's misroute path will not be recomputed */
-			assert(flit->getMisrouteCount(NONE) > 0);
 		}
 
 		nonMinOutP = baseRouting::minOutputPort(intNode);
@@ -104,9 +205,11 @@ public:
 		if (not (this->misrouteCondition(flit, inPort))) {
 			selectedRoute.port = minOutP;
 			flit->setCurrentMisrouteType(NONE);
+			if (inPort < g_p_computing_nodes_per_router) flit->setMisrouted(false, NONE);
 		} else {
 			selectedRoute.port = nonMinOutP;
 			flit->setCurrentMisrouteType(VALIANT);
+			flit->setMisrouted(true, VALIANT);
 		}
 
 		selectedRoute.neighPort = baseRouting::neighPort[selectedRoute.port];
@@ -115,7 +218,7 @@ public:
 		/* Sanity checks */
 		assert(selectedRoute.port < baseRouting::portCount && selectedRoute.port >= 0);
 		assert(selectedRoute.neighPort < baseRouting::portCount && selectedRoute.neighPort >= 0);
-		assert(selectedRoute.vc < g_local_link_channels && selectedRoute.vc >= 0);
+		assert(selectedRoute.vc < g_channels && selectedRoute.vc >= 0);
 
 		return selectedRoute;
 	}
@@ -127,8 +230,8 @@ private:
 	MisrouteType misrouteType(int inport, int inchannel, flitModule * flit, int minOutPort, int minOutVC) {
 		MisrouteType result = NONE;
 
-		/* Sanity assert to ensure not any flit is assigned misroute path twice */
-		assert(flit->getMisrouteCount(NONE) == 0);
+		/* Sanity assert to ensure not any flit is assigned misroute path more than once, unless specifically enforced*/
+		assert(flit->getMisrouteCount(NONE) == 0 || g_reset_val);
 
 		/* Source group may be susceptible to global misroute */
 		if ((flit->sourceGroup == baseRouting::switchM->hPos)) {
@@ -193,7 +296,7 @@ private:
 	 * condition.
 	 */
 	bool misrouteCondition(flitModule * flit, int inPort) {
-		int destination, minOutPort, nonMinOutPort, valNode, minQueueLength, nonMinQueueLength;
+		int destination, minOutPort, nonMinOutPort, minQueueLength, nonMinQueueLength;
 		bool result = false;
 
 		destination = flit->destId;
@@ -201,9 +304,9 @@ private:
 		nonMinOutPort = this->minOutputPort(flit->valId);
 
 		if ((inPort < g_p_computing_nodes_per_router) && (minOutPort >= g_p_computing_nodes_per_router)) {
-			minQueueLength = baseRouting::switchM->switchModule::getCreditsOccupancy(minOutPort,
+			minQueueLength = baseRouting::switchM->switchModule::getCreditsOccupancy(minOutPort, flit->cos,
 					this->nextChannel(inPort, minOutPort, flit)); //Credit occupancy for the minimal path outport
-			nonMinQueueLength = baseRouting::switchM->switchModule::getCreditsOccupancy(nonMinOutPort,
+			nonMinQueueLength = baseRouting::switchM->switchModule::getCreditsOccupancy(nonMinOutPort, flit->cos,
 					this->nextChannel(inPort, nonMinOutPort, flit)); //Credit occupancy for the Valiant outport
 			/* UGAL-L(ocal) condition: if the product of minimal outport queue occupancy and the
 			 * minimal path length is greater than the corresponding of non-minimal path (plus a
@@ -219,6 +322,8 @@ private:
 			result = true;
 		}
 
+		if (minOutPort < g_p_computing_nodes_per_router) result = false;
+
 		return result;
 	}
 
@@ -228,31 +333,6 @@ private:
 	int nominateCandidates(flitModule * flit, int inPort, int minOutP, double threshold, MisrouteType &misroute,
 			int* &candidates_port, int* &candidates_VC) {
 		assert(0);
-	}
-
-	int nextChannel(int inP, int outP, flitModule * flit) {
-		char outType, inType;
-		int next_channel, inVC = flit->channel;
-		assert(inP >= 0 && inP < baseRouting::portCount);
-		assert(outP >= 0 && outP < baseRouting::portCount);
-
-		inType = baseRouting::portType(inP);
-		outType = baseRouting::portType(outP);
-
-		if ((inType == 'p'))
-			next_channel = 0;
-		else if (inType == 'a' && outType == 'h'
-				&& (inVC == 2 || (inVC == 1 && this->switchM->hPos == flit->sourceGroup)))
-			next_channel = inVC - 1; // Local->global hop after reaching Val node
-		else if (inType == 'h' && outType == 'a' && baseRouting::switchM->hPos == flit->destGroup)
-			next_channel = inVC + 2; // Global->local hop in destination group
-		else if (outType == 'p' || (inType == 'a' && outType == 'h'))
-			next_channel = inVC;
-		else
-			next_channel = inVC + 1;
-
-		assert(next_channel < g_channels); // Sanity check
-		return (next_channel);
 	}
 };
 

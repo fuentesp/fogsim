@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,18 +22,34 @@
 #include "../../dgflySimulator.h"
 #include "../switchModule.h"
 
-outPort::outPort(int numVCs, int portNumber, switchModule * sw) :
-		port(numVCs, portNumber, sw) {
-	this->occupancyCredits = new int[this->numVCs];
-	this->maxCredits = new int[this->numVCs];
-	for (int i = 0; i < this->numVCs; i++) {
-		this->occupancyCredits[i] = 0;
-		this->maxCredits[i] = 0;
+outPort::outPort(unsigned short cosLevels, int numVCs, int portNumber, switchModule * sw) :
+		port(cosLevels, numVCs, portNumber, sw) {
+	/* When using FLEXIBLE vcs, the # of VCs is updated to reflect the new range of vcs
+	 * used (local & global vcs can not share a link to be more easily differentiated */
+	if (g_vc_usage == FLEXIBLE) this->numVCs = g_local_link_channels + g_global_link_channels;
+	this->occupancyCredits = new int*[this->cosLevels];
+	this->minOccupancyCredits = new int*[this->cosLevels];
+	this->maxCredits = new int*[this->cosLevels];
+	for (int cos = 0; cos < this->cosLevels; cos++) {
+		this->occupancyCredits[cos] = new int[this->numVCs];
+		this->minOccupancyCredits[cos] = new int[this->numVCs];
+		this->maxCredits[cos] = new int[this->numVCs];
+		for (int vc = 0; vc < this->numVCs; vc++) {
+			this->occupancyCredits[cos][vc] = 0;
+			this->minOccupancyCredits[cos][vc] = 0;
+			this->maxCredits[cos][vc] = 0;
+		}
 	}
 }
 
 outPort::~outPort() {
+	for (int cos = 0; cos < this->cosLevels; cos++) {
+		delete[] occupancyCredits[cos];
+		delete[] minOccupancyCredits[cos];
+		delete[] maxCredits[cos];
+	}
 	delete[] occupancyCredits;
+	delete[] minOccupancyCredits;
 	delete[] maxCredits;
 }
 
@@ -43,53 +59,82 @@ outPort::~outPort() {
  * we call next sw insertFlit() function and increase occupancy
  * credits, since the packet is occupying space in next sw.
  */
-void outPort::insert(int vc, flitModule* flit, float txLength) {
+void outPort::insert(int vc, flitModule* flit, float txLength, int buffer) {
+	assert(flit->cos >= 0 && flit->cos < this->cosLevels);
 	assert(vc >= 0 && vc < this->numVCs);
 	/* Increase occupancy statistics */
-	occupancyCredits[vc] += txLength;
-	assert(occupancyCredits[vc] <= maxCredits[vc]);
+	occupancyCredits[flit->cos][vc] += txLength;
+	assert(occupancyCredits[flit->cos][vc] <= maxCredits[flit->cos][vc]);
+	if (!flit->getMisrouted())
+		minOccupancyCredits[flit->cos][vc] += txLength;
+	else
+		flit->setMisrouted(true); /* Update misroute status */
+	assert(minOccupancyCredits[flit->cos][vc] <= occupancyCredits[flit->cos][vc]);
 
 	int nextP = m_sw->routing->neighPort[label];
 	m_sw->routing->neighList[label]->insertFlit(nextP, vc, flit);
 }
 
 /* Returns occupancy status of neighbor router input buffers based on credits */
-int outPort::getOccupancy(int vc) {
+int outPort::getOccupancy(unsigned short cos, int vc) {
+	assert(cos >= 0 && cos < this->cosLevels);
 	assert(vc >= 0 && vc < this->numVCs);
-	return occupancyCredits[vc];
+	return occupancyCredits[cos][vc];
 }
 
 /* Returns occupancy status for an output based on credits; in this case,
  * behavior is equivalent to getOccupancy() */
-int outPort::getTotalOccupancy(int vc) {
+int outPort::getTotalOccupancy(unsigned short cos, int vc, int buffer) {
+	assert(cos >= 0 && cos < this->cosLevels);
 	assert(vc >= 0 && vc < this->numVCs);
-	return occupancyCredits[vc];
+	return occupancyCredits[cos][vc];
 }
 
 /* Updates maximum occupancy registers. Should only
  * be called upon switch initialization phase */
-void outPort::setMaxOccupancy(int vc, int phits) {
+void outPort::setMaxOccupancy(unsigned short cos, int vc, int phits) {
+	assert(cos >= 0 && cos < this->cosLevels);
 	assert(vc >= 0 && vc < this->numVCs);
-	maxCredits[vc] = phits;
+	maxCredits[cos][vc] = phits;
 }
 
 /* Returns the value of maximum occupancy registers,
  * in phits. */
-int outPort::getMaxOccupancy(int vc) {
+int outPort::getMaxOccupancy(unsigned short cos, int vc) {
+	assert(cos >= 0 && cos < this->cosLevels);
 	assert(vc >= 0 && vc < this->numVCs);
-	return maxCredits[vc];
+	return maxCredits[cos][vc];
 }
 
-/* Increases occupancy registers */
-void outPort::increaseOccupancy(int vc, int phits) {
+int outPort::getMinOccupancy(unsigned short cos, int vc) {
+	assert(cos >= 0 && cos < this->cosLevels);
 	assert(vc >= 0 && vc < this->numVCs);
-	occupancyCredits[vc] += phits;
-	assert(occupancyCredits[vc] <= maxCredits[vc]);
+	return minOccupancyCredits[cos][vc];
+}
+
+void outPort::decreaseMinOccupancy(unsigned short cos, int vc, int phits) {
+	assert(cos >= 0 && cos < this->cosLevels);
+	assert(vc >= 0 && vc < this->numVCs);
+	minOccupancyCredits[cos][vc] -= phits;
+	assert(minOccupancyCredits[cos][vc] >= 0);
+}
+
+/* Increases occupancy registers.
+ * TODO: remove increaseOccupancy function?? it may be merged
+ * with insert function. The decreaseOccupancy function, on the
+ * other hand, may need to stay (credits from next sw are only
+ * updated when sw rx. a credit pkt). */
+void outPort::increaseOccupancy(unsigned short cos, int vc, int phits) {
+	assert(cos >= 0 && cos < this->cosLevels);
+	assert(vc >= 0 && vc < this->numVCs);
+	occupancyCredits[cos][vc] += phits;
+	assert(occupancyCredits[cos][vc] <= maxCredits[cos][vc]);
 }
 
 /* Decreases occupancy registers */
-void outPort::decreaseOccupancy(int vc, int phits) {
+void outPort::decreaseOccupancy(unsigned short cos, int vc, int phits) {
+	assert(cos >= 0 && cos < this->cosLevels);
 	assert(vc >= 0 && vc < this->numVCs);
-	occupancyCredits[vc] -= phits;
-	assert(occupancyCredits[vc] >= 0);
+	occupancyCredits[cos][vc] -= phits;
+	assert(occupancyCredits[cos][vc] >= 0);
 }

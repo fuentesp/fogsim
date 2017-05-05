@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -18,27 +18,40 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#ifndef class_localarbiter
-#define class_localarbiter
+#ifndef class_globalarbiter
+#define class_globalarbiter
 
-#include "../../global.h"
 #include "arbiter.h"
+#include "lrsArbiter.h"
+#include "priorityLrsArbiter.h"
+#include "rrArbiter.h"
+#include "priorityRrArbiter.h"
+#include "ageArbiter.h"
+#include "priorityAgeArbiter.h"
 
 using namespace std;
 
-class flitModule;
-
-class localArbiter: public arbiter {
+class outputArbiter {
 public:
-	localArbiter(int inPortNumber, switchModule *switchM);
-	~localArbiter();
+	int label; /* Arbiter ID */
+	int *petitions;
+	int *nextChannels;
+	int *nextPorts;
+	int *inputChannels;
+	unsigned short *inputCos;
+	outputArbiter(int outPortNumber, unsigned short cosLevels, int ports, switchModule *switchM, ArbiterType policy);
+	~outputArbiter();
+	int action();
+	void initPetitions();
 	bool checkPort();
-	bool portCanSendFlit(int port, int vc);
 
 private:
-	bool attendPetition(int input_channel);
-	bool petitionCondition(int input_port, int input_channel, int outP, int nextP, int nextC, flitModule *flitEx);
+	arbiter *arbProtocol;
+	switchModule *switchM; /* Associated switch */
+
+	bool attendPetition(int port);
 	void updateStatistics(int port);
+
 };
 
 #endif

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,8 +22,10 @@
 #include "../../dgflySimulator.h"
 #include "../switchModule.h"
 
-port::port(int numVCs, int portNumber, switchModule * sw) {
+port::port(unsigned short cosLevels, int numVCs, int portNumber, switchModule * sw) {
+	assert(cosLevels > 0 && cosLevels <= g_cos_levels);
 	this->label = portNumber;
+	this->cosLevels = cosLevels;
 	this->numVCs = numVCs;
 	this->m_sw = sw;
 }

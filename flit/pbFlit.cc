@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -26,13 +26,16 @@ long long pbFlit::id = 0;
  * Creates a message with a PARTIAL COPY of the globalLinkCongested array
  * with 'g_h_global_ports_per_router' elements (one per global link in the switch).
  */
-pbFlit::pbFlit(int srcOffset, bool** globalLinkCongested, float arrivalCycle) :
+pbFlit::pbFlit(int srcOffset, bool*** globalLinkCongested, float arrivalCycle) :
 		m_srcOffset(srcOffset), m_arrivalCycle(arrivalCycle), m_generatedCycle(g_internal_cycle), m_id(pbFlit::id++) {
-	m_globalLinkInfo = new bool*[g_h_global_ports_per_router];
+	m_globalLinkInfo = new bool**[g_h_global_ports_per_router];
 	for (int i = 0; i < g_h_global_ports_per_router; i++) {
-		m_globalLinkInfo[i] = new bool[g_global_link_channels];
-		for (int channel = 0; channel < g_global_link_channels; channel++) {
-			m_globalLinkInfo[i][channel] = globalLinkCongested[srcOffset + i][channel];
+		m_globalLinkInfo[i] = new bool*[g_cos_levels];
+		for (int cos = 0; cos < g_cos_levels; cos++) {
+			m_globalLinkInfo[i][cos] = new bool[g_global_link_channels];
+			for (int channel = 0; channel < g_global_link_channels; channel++) {
+				m_globalLinkInfo[i][cos][channel] = globalLinkCongested[srcOffset + i][cos][channel];
+			}
 		}
 		assert(m_globalLinkInfo[i] != NULL);
 	}
@@ -41,13 +44,17 @@ pbFlit::pbFlit(int srcOffset, bool** globalLinkCongested, float arrivalCycle) :
 pbFlit::pbFlit(const pbFlit& original) :
 		m_srcOffset(original.m_srcOffset), m_arrivalCycle(original.m_arrivalCycle), m_generatedCycle(
 				original.m_generatedCycle), m_id(original.m_id) {
-	m_globalLinkInfo = new bool*[g_h_global_ports_per_router];
+	m_globalLinkInfo = new bool**[g_h_global_ports_per_router];
 	assert(original.m_globalLinkInfo != NULL);
 	for (int i = 0; i < g_h_global_ports_per_router; i++) {
-		m_globalLinkInfo[i] = new bool[g_global_link_channels];
+		m_globalLinkInfo[i] = new bool*[g_cos_levels];
 		assert(original.m_globalLinkInfo[i] != NULL);
-		for (int channel = 0; channel < g_global_link_channels; channel++) {
-			m_globalLinkInfo[i][channel] = original.m_globalLinkInfo[i][channel];
+		for (int cos = 0; cos < g_cos_levels; cos++) {
+			m_globalLinkInfo[i][cos] = new bool[g_global_link_channels];
+			assert(original.m_globalLinkInfo[i][cos] != NULL);
+			for (int channel = 0; channel < g_global_link_channels; channel++) {
+				m_globalLinkInfo[i][cos][channel] = original.m_globalLinkInfo[i][cos][channel];
+			}
 		}
 		assert(m_globalLinkInfo[i] != NULL);
 	}
@@ -55,8 +62,9 @@ pbFlit::pbFlit(const pbFlit& original) :
 
 pbFlit::~pbFlit() {
 	for (int i = 0; i < g_h_global_ports_per_router; i++) {
-		delete[] m_globalLinkInfo[i];
-		m_globalLinkInfo[i] = NULL;
+		for (int cos = 0; cos < g_cos_levels; cos++)
+			delete[] m_globalLinkInfo[i][cos];
+		delete m_globalLinkInfo[i];
 	}
 	delete[] m_globalLinkInfo;
 }
@@ -69,8 +77,8 @@ float pbFlit::getArrivalCycle() const {
  * Returns true if the n-th global link in the
  * current switch is congested
  */
-bool pbFlit::getGlobalLinkInfo(int n, int channel) const {
-	return m_globalLinkInfo[n][channel];
+bool pbFlit::getGlobalLinkInfo(int n, unsigned short cos, int channel) const {
+	return m_globalLinkInfo[n][cos][channel];
 }
 
 int pbFlit::getSrcOffset() const {
@@ -80,7 +88,7 @@ int pbFlit::getSrcOffset() const {
 /*
  *  Priority comparation: earlier flit has higher priority
  */
-bool pbFlit::operator <(const pbFlit& flit) const {
+bool pbFlit::operator<(const pbFlit& flit) const {
 	return flit.getArrivalCycle() < getArrivalCycle();
 }
 

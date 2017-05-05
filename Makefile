@@ -1,19 +1,19 @@
 all: fogsim
 
 CC = g++
-RFLAGS = -O2 -g -std=c++0x
-CFLAGS = -c -g -Wno-sign-compare -std=c++0x
-LFLAGS = -g -Wall 
-ROUTING = routing.h ofar.h par.h pb.h pbAny.h rlm.h ugal.h
+RFLAGS = -O2 -std=c++11
+CFLAGS = -c -g -Wno-sign-compare -std=c++11
+DFLAGS = -g -Wall
+ROUTING = routing.h flexibleRouting.h ofar.h par.h pb.h pbAny.h rlm.h ugal.h
 ROUTING_FILES = $(addprefix routing/, $(ROUTING))
 FLIT = flitModule.h pbFlit.h creditFlit.h caFlit.h
 FLIT_FILES = $(addprefix flit/, $(FLIT))
 TRAFFIC = steady.h burst.h all2all.h mix.h transient.h
 TRAFFIC_FOLDERS = $(addprefix generator/, $(addprefix trafficPattern/, $(TRAFFIC)))
-GENERATOR = event.h generatorModule.h trace.h traceGenerator.h burstGenerator.h
+GENERATOR = event.h generatorModule.h trace.h traceGenerator.h burstGenerator.h graph500Generator.h
 GENERATOR_FILES = $(addprefix generator/, $(GENERATOR)) $(TRAFFIC_FOLDERS)
 SWITCH = switchModule.h ioqSwitchModule.h
-ARBITER = arbiter.h localArbiter.h globalArbiter.h priorityGlobalArbiter.h
+ARBITER = arbiter.h cosArbiter.h lrsArbiter.h priorityLrsArbiter.h rrArbiter.h priorityRrArbiter.h ageArbiter.h priorityAgeArbiter.h inputArbiter.h outputArbiter.h
 PORT = port.h bufferedPort.h inPort.h outPort.h bufferedOutPort.h dynBufInPort.h dynBufOutPort.h dynBufBufferedOutPort.h
 BUFFER = buffer.h
 SWITCH_FOLDERS = $(SWITCH) $(ARBITER) $(BUFFER) $(PORT)
@@ -25,7 +25,7 @@ fogsim:
 	$(CC) $(RFLAGS) dgflySimulator.cc gModule.cc configurationFile.cc global.cc pbState.cc caHandler.cc communicator.cc $(FLIT_FILES:.h=.cc) $(ROUTING_FILES:.h=.cc) $(SWITCH_FILES:.h=.cc) $(GENERATOR_FILES:.h=.cc) -o fogsim
 
 dev: dgflySimulator.o gModule.o configurationFile.o global.o pbState.o caHandler.o communicator.o $(FLIT:.h=.o) $(ROUTING:.h=.o) $(GENERATOR:.h=.o) $(TRAFFIC:.h=.o) $(SWITCH_FOLDERS:.h=.o) 
-	$(CC) $(LFLAGS) dgflySimulator.o gModule.o configurationFile.o global.o pbState.o caHandler.o communicator.o $(FLIT:.h=.o) $(ROUTING:.h=.o) $(GENERATOR:.h=.o) $(TRAFFIC:.h=.o) $(SWITCH_FOLDERS:.h=.o) -o fogsim
+	$(CC) $(DFLAGS) dgflySimulator.o gModule.o configurationFile.o global.o pbState.o caHandler.o communicator.o $(FLIT:.h=.o) $(ROUTING:.h=.o) $(GENERATOR:.h=.o) $(TRAFFIC:.h=.o) $(SWITCH_FOLDERS:.h=.o) -o fogsim
 
 dgflySimulator.o: dgflySimulator.cc $(HEADERS)
 	$(CC) $(CFLAGS) dgflySimulator.cc

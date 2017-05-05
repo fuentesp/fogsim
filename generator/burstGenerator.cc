@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -49,43 +49,12 @@ burstGenerator::~burstGenerator() {
  * are triggered through the On2Off and Off2On possibilities determined
  * by the average burst length and injection probability.
  */
-void burstGenerator::generateFlit() {
+flitModule* burstGenerator::generateFlit(FlitType flitType, int destId) {
 	/* If there are no available credits, do not attempt to
 	 * change state: OFF2ON would not enforce injection,
 	 * and ON2OFF would reduce average burst size below
-	 * specified value.
-	 */
-	m_flit_created = false;
-
-	if ((g_cycle == 0 || g_cycle >= (lastTimeSent + interArrivalTime))) {
-		/* Determine current cycle status */
-		double random = rand() / ((double) RAND_MAX + 1);
-		if (!injecting) { /* Current status: OFF */
-			if (random < (double) pOff2On) {
-				injecting = true;
-				destLabel = pattern->setDestination(UN);
-				prevDest = destLabel;
-				g_injected_bursts_counter++;
-				m_injVC = int(destLabel * (g_injection_channels) / g_number_generators);
-			}
-		} else if (switchM->switchModule::getCredits(this->pPos, m_injVC) >= g_packet_size) { /* Current status: ON */
-			if (random < pOn2Off) {
-				random = rand() / ((double) RAND_MAX + 1);
-				if (random < pOff2On) {
-					destLabel = pattern->setDestination(UN);
-					prevDest = destLabel;
-					g_injected_bursts_counter++;
-					m_injVC = int(destLabel * (g_injection_channels) / g_number_generators);
-				} else {
-					injecting = false;
-					curBurstLength = 0;
-				}
-			} else {
-				destLabel = prevDest;
-			}
-		}
-		assert(!injecting || (destLabel >= 0 && destLabel < g_number_generators));
-	}
+	 * specified value. */
+	flitModule* genFlit = NULL;
 
 	/* Determine flit position within packet. When it overflows
 	 the number of flits per packet, it is reset to 0. */
@@ -95,22 +64,72 @@ void burstGenerator::generateFlit() {
 	}
 
 	/* Generate packet */
-	if ((m_flitSeq > 0) || (g_cycle == 0) || ((g_cycle >= (lastTimeSent + interArrivalTime)))) {
-		if ((m_flitSeq > 0)
-				|| (injecting && (switchM->switchModule::getCredits(this->pPos, m_injVC) >= g_packet_size))) {
-			if (m_flitSeq == 0) {		// Flit is header of packet
-				m_packet_id = g_tx_packet_counter;
-				destSwitch = int(destLabel / g_p_computing_nodes_per_router);
+	vector<int> vct;
+
+	if (destId >= 0) {
+		/* Response packet to a received petition */
+		assert(
+				(g_cycle >= (lastTimeSent + interArrivalTime))
+						&& switchM->switchModule::getPortCredits(this->pPos, 0, vct) >= g_packet_size);
+		/* TODO: Currently CoS level feature is not exploited, only checks CoS 0 */
+		destLabel = destId;
+		destSwitch = int(destLabel / g_p_computing_nodes_per_router);
+		genFlit = new flitModule(m_packet_id, g_tx_flit_counter, 0, sourceLabel, destLabel, destSwitch, 0, true, true);
+		genFlit->channel = this->getInjectionVC(destLabel, flitType);
+		genFlit->flitType = flitType;
+	} else {
+		/* Generate petition packet */
+		if ((g_cycle == 0 || g_cycle >= (lastTimeSent + interArrivalTime))) {
+			/* Determine current cycle status */
+			double random = rand() / ((double) RAND_MAX + 1);
+			if (!injecting) { /* Current status: OFF */
+				if (random < (double) pOff2On) {
+					injecting = true;
+					destLabel = pattern->setDestination(UN);
+					prevDest = destLabel;
+					g_injected_bursts_counter++;
+					m_injVC = this->getInjectionVC(destLabel, flitType);
+				}
+			} else if (switchM->switchModule::getCredits(this->pPos, 0, m_injVC) >= g_packet_size) {
+				/* Current status: ON */
+				if (random < pOn2Off) {
+					random = rand() / ((double) RAND_MAX + 1);
+					if (random < pOff2On) {
+						destLabel = pattern->setDestination(UN);
+						prevDest = destLabel;
+						g_injected_bursts_counter++;
+						m_injVC = this->getInjectionVC(destLabel, flitType);
+					} else {
+						injecting = false;
+						curBurstLength = 0;
+					}
+				} else {
+					destLabel = prevDest;
+				}
 			}
-			flit = new flitModule(m_packet_id, g_tx_flit_counter, m_flitSeq, sourceLabel, destLabel, destSwitch, 0, 0,
-					0);
-			if (m_flitSeq == (g_flits_per_packet - 1)) flit->tail = 1;
-			if (m_flitSeq == 0) flit->head = 1;
-			assert(m_flitSeq < g_flits_per_packet);
-			m_flit_created = true;
-			curBurstLength++;
-			g_injected_packet_counter++;
+			assert(!injecting || (destLabel >= 0 && destLabel < g_number_generators));
+		}
+
+		/* Generate packet */
+		if ((m_flitSeq > 0) || (g_cycle == 0) || ((g_cycle >= (lastTimeSent + interArrivalTime)))) {
+			if ((m_flitSeq > 0)
+					|| (injecting && (switchM->switchModule::getCredits(this->pPos, 0, m_injVC) >= g_packet_size))) {
+				if (m_flitSeq == 0) {		// Flit is header of packet
+					m_packet_id = g_tx_packet_counter;
+					destSwitch = int(destLabel / g_p_computing_nodes_per_router);
+				}
+				genFlit = new flitModule(m_packet_id, g_tx_flit_counter, m_flitSeq, sourceLabel, destLabel, destSwitch,
+						0, 0, 0);
+				genFlit->channel = m_injVC;
+				genFlit->flitType = flitType;
+				if (m_flitSeq == (g_flits_per_packet - 1)) genFlit->tail = 1;
+				if (m_flitSeq == 0) genFlit->head = 1;
+				assert(m_flitSeq < g_flits_per_packet);
+				curBurstLength++;
+				g_injected_packet_counter++;
+			}
 		}
 	}
+	return genFlit;
 }
 

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,7 +23,8 @@
 using namespace std;
 
 flitModule::flitModule(int packetId, int flitId, int flitSeq, int sourceId, int destId, int destSwitch, int valId,
-		bool head, bool tail) {
+		bool head, bool tail, unsigned short cos) {
+	assert(destId < g_number_generators);
 	this->flitId = flitId;
 	this->packetId = packetId;
 	this->flitSeq = flitSeq; /* Flit offset within packet */
@@ -43,6 +44,7 @@ flitModule::flitModule(int packetId, int flitId, int flitSeq, int sourceId, int 
 	inCycle = 0;
 	inCyclePacket = 0;
 	m_misrouted = false;
+	m_misrouted_prev = false;
 	m_current_misroute_type = NONE;
 	mandatoryGlobalMisrouting_flag = 0;
 	localMisroutingDone = 0;
@@ -66,12 +68,19 @@ flitModule::flitModule(int packetId, int flitId, int flitSeq, int sourceId, int 
 	sourceSubnetworkInjectionsCount = 0;
 	localEscapeContentionCount = 0;
 	globalEscapeContentionCount = 0;
+	flitType = RESPONSE;
+	petitionSrcId = -1;
+	petitionLatency = 0;
+	this->length = g_flit_size;
+	assert(cos < g_cos_levels);
+	this->cos = cos;
+	graph_queries = -1;
 
 	this->nextP = this->nextVC = this->prevP = this->prevVC - 1;
 }
 
 /*
- * Adds hop to flit counter when advancing from a switch
+ * Adds hop to flit counter when transitting from a switch
  * to another. Besides main counter, also tracks if hop
  * belongs to escape subnetwork and whether the hop is through
  * a local or a global link.
@@ -80,34 +89,39 @@ void flitModule::addHop(int outP, int swId) {
 	hopCount++;
 	if (g_max_hops < hopCount) g_max_hops = hopCount;
 
+	assert(this->channel >= 0 && this->channel < g_channels);
+
 	/* Update local/global hop counters */
 	int thisA = swId % (g_a_routers_per_group);
-	/* First check if flit is advancing through escape subnetwork */
-	if (this->channel >= g_local_link_channels) {
-		/* Embedded network */
-		assert(g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING);
-		if (outP < g_global_router_links_offset) {
-			localEscapeHopCount++;
-			if (g_max_local_subnetwork_hops < localEscapeHopCount) g_max_local_subnetwork_hops =
-					localEscapeHopCount;
-		} else {
-			globalEscapeHopCount++;
-			if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops =
-					globalEscapeHopCount;
+	/* First check if flit is transitting through escape subnetwork */
+	if (g_vc_usage == BASE) {
+		if ((g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING)
+				&& this->channel >= g_local_link_channels) {
+			/* Embedded network */
+			if (outP < g_global_router_links_offset) {
+				localEscapeHopCount++;
+				if (g_max_local_subnetwork_hops < localEscapeHopCount) g_max_local_subnetwork_hops =
+						localEscapeHopCount;
+			} else {
+				globalEscapeHopCount++;
+				if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops =
+						globalEscapeHopCount;
+			}
+			return;
+		} else if (outP >= g_global_router_links_offset + g_h_global_ports_per_router) {
+			/* Physical ring */
+			assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
+			if ((outP == g_ports - 2 && thisA == 0) || (outP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
+				globalEscapeHopCount++;
+				if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops =
+						globalEscapeHopCount;
+			} else {
+				localEscapeHopCount++;
+				if (g_max_local_subnetwork_hops < localEscapeHopCount) g_max_local_subnetwork_hops =
+						localEscapeHopCount;
+			}
+			return;
 		}
-		return;
-	} else if (outP >= g_global_router_links_offset + g_h_global_ports_per_router) {
-		/* Physical ring */
-		assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
-		if ((outP == g_ports - 2 && thisA == 0) || (outP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
-			globalEscapeHopCount++;
-			if (g_max_global_subnetwork_hops < globalEscapeHopCount) g_max_local_subnetwork_hops =
-					globalEscapeHopCount;
-		} else {
-			localEscapeHopCount++;
-			if (g_max_local_subnetwork_hops < localEscapeHopCount) g_max_local_subnetwork_hops = localEscapeHopCount;
-		}
-		return;
 	}
 
 	/* Flit is being tx. through main net */
@@ -134,41 +148,45 @@ void flitModule::addSubnetworkInjection() {
 }
 
 /*
- * Adds cycle to contention counter when a flit is received
- * in a switch. Distinguishes between normal and escape
- * subnetwork counters.
+ * Adds cycle to contention counter when a flit is rx. in a
+ * switch. Distinguishes among normal and escape subnetwork
+ * counters.
  */
 void flitModule::addContention(int inP, int swId) {
 	/* If input port is a computing node, do not track contention */
 	if (inP < g_p_computing_nodes_per_router) return;
 
+	assert(this->channel >= 0 && this->channel < g_channels);
+
 	int thisA = swId % (g_a_routers_per_group);
-	/* First check if flit is advancing through escape subnetwork */
-	if (this->channel >= g_local_link_channels) {
-		/* Embedded network */
-		assert(g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING);
-		if (inP < g_global_router_links_offset) {
-			localEscapeContentionCount += g_internal_cycle;
-		} else {
-			globalEscapeContentionCount += g_internal_cycle;
+	/* First check if flit is transitting through escape subnetwork */
+	if (g_vc_usage == BASE) {
+		if ((g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING)
+				&& this->channel >= g_local_link_channels) {
+			/* Embedded network */
+			if (inP < g_global_router_links_offset) {
+				localEscapeContentionCount += g_internal_cycle;
+			} else {
+				globalEscapeContentionCount += g_internal_cycle;
+			}
+			return;
+		} else if (inP >= g_global_router_links_offset + g_h_global_ports_per_router) {
+			/* Physical ring */
+			assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
+			if ((inP == g_ports - 2 && thisA == 0) || (inP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
+				globalEscapeContentionCount += g_internal_cycle;
+			} else {
+				localEscapeContentionCount += g_internal_cycle;
+			}
+			return;
 		}
-		return;
-	} else if (inP >= g_global_router_links_offset + g_h_global_ports_per_router) {
-		/* Physical ring */
-		assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
-		if ((inP == g_ports - 2 && thisA == 0) || (inP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
-			globalEscapeContentionCount += g_internal_cycle;
-		} else {
-			localEscapeContentionCount += g_internal_cycle;
-		}
-		return;
 	}
 
 	/* Flit is being tx through main net */
 	if (inP < g_global_router_links_offset) {
 		/* Local link */
 		localContentionCount += g_internal_cycle;
-	} else {
+	} else if (inP < g_global_router_links_offset + g_h_global_ports_per_router) {
 		/* Global link */
 		globalContentionCount += g_internal_cycle;
 	}
@@ -182,25 +200,29 @@ void flitModule::addContention(int inP, int swId) {
 void flitModule::subsContention(int outP, int swId) {
 	int thisA = swId % (g_a_routers_per_group);
 
+	assert(this->channel >= 0 && this->channel < g_channels);
+
 	/* First check if flit is transitting through escape subnetwork */
-	if (this->channel >= g_local_link_channels) {
-		/* Embedded network */
-		assert(g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING);
-		if (outP < g_global_router_links_offset) {
-			localEscapeContentionCount -= (g_internal_cycle + g_local_link_transmission_delay);
-		} else {
-			globalEscapeContentionCount -= (g_internal_cycle + g_global_link_transmission_delay);
+	if (g_vc_usage == BASE) {
+		if ((g_deadlock_avoidance == EMBEDDED_TREE || g_deadlock_avoidance == EMBEDDED_RING)
+				&& this->channel >= g_local_link_channels) {
+			/* Embedded network */
+			if (outP < g_global_router_links_offset) {
+				localEscapeContentionCount -= (g_internal_cycle + g_local_link_transmission_delay);
+			} else {
+				globalEscapeContentionCount -= (g_internal_cycle + g_global_link_transmission_delay);
+			}
+			return;
+		} else if (outP >= g_global_router_links_offset + g_h_global_ports_per_router) {
+			/* Physical ring */
+			assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
+			if ((outP == g_ports - 2 && thisA == 0) || (outP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
+				globalEscapeContentionCount -= (g_internal_cycle + g_global_link_transmission_delay);
+			} else {
+				localEscapeContentionCount -= (g_internal_cycle + g_local_link_transmission_delay);
+			}
+			return;
 		}
-		return;
-	} else if (outP >= g_global_router_links_offset + g_h_global_ports_per_router) {
-		/* Physical ring */
-		assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
-		if ((outP == g_ports - 2 && thisA == 0) || (outP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
-			globalEscapeContentionCount -= (g_internal_cycle + g_global_link_transmission_delay);
-		} else {
-			localEscapeContentionCount -= (g_internal_cycle + g_local_link_transmission_delay);
-		}
-		return;
 	}
 
 	if (outP < g_global_router_links_offset) {
@@ -217,6 +239,7 @@ void flitModule::setChannel(int nextVC) {
 }
 
 void flitModule::setMisrouted(bool misrouted) {
+	this->m_misrouted_prev = this->m_misrouted;
 	this->m_misrouted = misrouted;
 }
 
@@ -269,6 +292,10 @@ void flitModule::setCurrentMisrouteType(MisrouteType current_misroute_type) {
 
 bool flitModule::getMisrouted() const {
 	return m_misrouted;
+}
+
+bool flitModule::getPrevMisrouted() const {
+	return m_misrouted_prev;
 }
 
 MisrouteType flitModule::getCurrentMisrouteType() const {

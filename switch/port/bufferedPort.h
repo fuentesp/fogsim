@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -28,36 +28,38 @@ using namespace std;
 
 class bufferedPort {
 protected:
+	unsigned short cosLevels;
 	int numVCs;
-	buffer **vcBuffers;
+	buffer ***vcBuffers; /* 2-Dimensional array: [Cos-Level,Vc] */
 	int reservedBufferCapacity; /* Per each VC buffer */
 	int aggregatedBufferCapacity; /* number of FLITS all the associated buffers can store altogether (free shared slots) */
 public:
-	bufferedPort(int numVCs, int bufferNumber, int bufferCapacity, float delay, int reservedBufferCapacity = 0);
-	~bufferedPort();
-	virtual int getSpace(int vc);
-	void checkFlit(int vc, flitModule* &nextFlit);
-	bool unLocked(int vc);
-	int getBufferOccupancy(int vc);
-	bool emptyBuffer(int vc);
-	bool canSendFlit(int vc);
-	bool canReceiveFlit(int vc);
-	bool isBufferSending(int vc);
-	void reorderBuffer(int vc);
-	float getDelay(int vc) const;
-	float getHeadEntryCycle(int vc);
-	void setCurPkt(int vc, int id);
-	int getCurPkt(int vc);
-	void setOutCurPkt(int vc, int port);
-	int getOutCurPkt(int vc);
-	void setNextVcCurPkt(int vc, int nextVc);
-	int getNextVcCurPkt(int vc);
-	int getBufferCapacity(int vc);
-	void setPktLock(int vc, int id);
-	int getPktLock(int vc);
-	void setPortPktLock(int vc, int port);
-	void setVcPktLock(int vc, int prevVc);
-	void setUnlocked(int vc, int unlocked);
+	bufferedPort(unsigned short cosLevels, int numVCs, int bufferNumber, int bufferCapacity, float delay,
+			int reservedBufferCapacity = 0);
+	virtual ~bufferedPort();
+	virtual int getSpace(unsigned short cos, int vc);
+	void checkFlit(unsigned short cos, int vc, flitModule* &nextFlit, int offset = 0);
+	bool unLocked(unsigned short cos, int vc);
+	int getBufferOccupancy(unsigned short cos, int vc);
+	bool emptyBuffer(unsigned short cos, int vc);
+	bool canSendFlit(unsigned short cos, int vc);
+	bool canReceiveFlit(unsigned short cos, int vc);
+	bool isBufferSending(unsigned short cos, int vc);
+	void reorderBuffer(unsigned short cos, int vc);
+	float getDelay(unsigned short cos, int vc) const;
+	float getHeadEntryCycle(unsigned short cos, int vc);
+	void setCurPkt(unsigned short cos, int vc, int id);
+	int getCurPkt(unsigned short cos, int vc);
+	void setOutCurPkt(unsigned short cos, int vc, int port);
+	int getOutCurPkt(unsigned short cos, int vc);
+	void setNextVcCurPkt(unsigned short cos, int vc, int nextVc);
+	int getNextVcCurPkt(unsigned short cos, int vc);
+	int getBufferCapacity(unsigned short cos, int vc);
+	void setPktLock(unsigned short cos, int vc, int id);
+	int getPktLock(unsigned short cos, int vc);
+	void setPortPktLock(unsigned short cos, int vc, int port);
+	void setVcPktLock(unsigned short cos, int vc, int prevVc);
+	void setUnlocked(unsigned short cos, int vc, int unlocked);
 };
 
 #endif /* BUFFERED_PORT_H_ */

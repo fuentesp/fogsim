@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -34,6 +34,8 @@
 #include "../routing/obl.h"
 #include "../routing/srcAdp.h"
 #include "../flit/creditFlit.h"
+#include "../routing/routing.h"
+#include <iomanip>
 
 using namespace std;
 
@@ -41,18 +43,17 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 		piggyBack(aPos), m_ca_handler(this) {
 	this->name = name;
 	this->portCount = ports;
+	this->cosLevels = g_cos_levels;
 	this->vcCount = vcCount;
-	this->inPorts = new inPort *[this->portCount];
-	this->outPorts = new outPort *[this->portCount];
-	this->localArbiters = new localArbiter *[this->portCount];
-	this->globalArbiters = new globalArbiter *[this->portCount];
+	this->inPorts = new inPort *[portCount];
+	this->outPorts = new outPort *[portCount];
+	this->inputArbiters = new inputArbiter *[portCount];
+	this->outputArbiters = new outputArbiter *[portCount];
 	this->label = label;
-	this->pPos = 0;
 	this->aPos = aPos;
 	this->hPos = hPos;
 	this->messagesInQueuesCounter = 0;
 	this->escapeNetworkCongested = false;
-	this->lastConsumeCycle = new float[this->portCount];
 	this->queueOccupancy = new float[ports * this->vcCount];
 	this->injectionQueueOccupancy = new float[this->vcCount];
 	this->localQueueOccupancy = new float[this->vcCount];
@@ -61,7 +62,9 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 	this->globalEscapeQueueOccupancy = new float[this->vcCount];
 	this->packetsInj = 0;
 	this->reservedOutPort = new bool[this->portCount];
-	this->reservedInPort = new bool[this->vcCount];
+	this->reservedInPort = new bool*[cosLevels];
+	for (int cos = 0; cos < cosLevels; cos++)
+		this->reservedInPort[cos] = new bool[this->vcCount];
 
 	int p, c, bufferCap;
 	float linkDelay;
@@ -69,16 +72,23 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 
 	switch (g_routing) {
 		case MIN:
-			this->routing = new minimal<baseRouting>(this);
+			if (g_vc_usage == FLEXIBLE)
+				this->routing = new minimal<flexibleVcRouting>(this);
+			else
+				this->routing = new minimal<baseRouting>(this);
 			break;
 		case MIN_COND:
+			assert(g_vc_usage == BASE);
 			this->routing = new minCond(this);
 			break;
 		case OFAR:
 			this->routing = new ofar(this);
 			break;
 		case OLM:
-			this->routing = new olm<baseRouting>(this);
+			if (g_vc_usage == FLEXIBLE)
+				this->routing = new olm<flexibleVcRouting>(this);
+			else
+				this->routing = new olm<baseRouting>(this);
 			break;
 		case PAR:
 			this->routing = new par(this);
@@ -96,16 +106,28 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 			this->routing = new ugal(this);
 			break;
 		case VAL:
-			this->routing = new val<baseRouting>(this);
+			if (g_vc_usage == FLEXIBLE)
+				this->routing = new val<flexibleVcRouting>(this);
+			else
+				this->routing = new val<baseRouting>(this);
 			break;
 		case VAL_ANY:
-			this->routing = new valAny<baseRouting>(this);
+			if (g_vc_usage == FLEXIBLE)
+				this->routing = new valAny<flexibleVcRouting>(this);
+			else
+				this->routing = new valAny<baseRouting>(this);
 			break;
 		case OBL:
-			this->routing = new oblivious<baseRouting>(this);
+			if (g_vc_usage == FLEXIBLE)
+				this->routing = new oblivious<flexibleVcRouting>(this);
+			else
+				this->routing = new oblivious<baseRouting>(this);
 			break;
 		case SRC_ADP:
-			this->routing = new sourceAdp<baseRouting>(this);
+			if (g_vc_usage == FLEXIBLE)
+				this->routing = new sourceAdp<flexibleVcRouting>(this);
+			else
+				this->routing = new sourceAdp<baseRouting>(this);
 			break;
 		default:
 			//YET UNDEFINED!
@@ -116,13 +138,12 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 	/* Each output port has initially -1 credits
 	 * Function findneighbours sets this values according
 	 * to the destination buffer capacity */
-	incomingCredits = new queue<creditFlit> *[ports];
-	for (p = 0; p < ports; p++) {
+	incomingCredits = new queue<creditFlit> *[portCount];
+	for (p = 0; p < portCount; p++) {
 		for (c = 0; c < this->vcCount; c++) {
 			this->queueOccupancy[(p * this->vcCount) + c] = 0;
 		}
 		incomingCredits[p] = new queue<creditFlit>;
-		this->lastConsumeCycle[p] = -999;
 	}
 
 	for (c = 0; c < this->vcCount; c++) {
@@ -132,48 +153,75 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 		this->localEscapeQueueOccupancy[c] = 0;
 		this->globalEscapeQueueOccupancy[c] = 0;
 	}
+	this->outputQueueOccupancy = 0;
 
-	/* Injection queues */
-	for (p = 0; p < g_p_computing_nodes_per_router; p++) {
-		this->inPorts[p] = new inPort(g_injection_channels, p, p * this->vcCount, g_injection_queue_length,
-				g_injection_delay, this);
-		this->outPorts[p] = new outPort(g_injection_channels, p, this);
-	}
-	/* Local queues */
-	for (p = g_p_computing_nodes_per_router; p < g_global_router_links_offset; p++) {
-		this->inPorts[p] = new inPort(g_local_link_channels, p, p * this->vcCount, g_local_queue_length,
-				g_local_link_transmission_delay, this);
-		this->outPorts[p] = new outPort(g_local_link_channels, p, this);
-	}
-	/* Global queues */
-	for (p = g_global_router_links_offset; p < g_global_router_links_offset + g_h_global_ports_per_router; p++) {
-		this->inPorts[p] = new inPort(g_global_link_channels, p, p * this->vcCount, g_global_queue_length,
-				g_global_link_transmission_delay, this);
-		this->outPorts[p] = new outPort(g_global_link_channels, p, this);
+	switch (g_buffer_type) {
+		case SEPARATED:
+			/* Injection queues */
+			for (p = 0; p < g_p_computing_nodes_per_router; p++) {
+				this->inPorts[p] = new inPort(cosLevels, g_injection_channels, p, p * cosLevels * this->vcCount,
+						g_injection_queue_length, g_injection_delay, this);
+				this->outPorts[p] = new outPort(this->cosLevels, g_injection_channels, p, this);
+			}
+			/* Local queues */
+			for (p = g_p_computing_nodes_per_router; p < g_global_router_links_offset; p++) {
+				this->inPorts[p] = new inPort(cosLevels, g_local_link_channels, p, p * cosLevels * this->vcCount,
+						g_local_queue_length, g_local_link_transmission_delay, this);
+				this->outPorts[p] = new outPort(this->cosLevels, g_local_link_channels, p, this);
+			}
+			/* Global queues */
+			for (p = g_global_router_links_offset; p < g_global_router_links_offset + g_h_global_ports_per_router;
+					p++) {
+				this->inPorts[p] = new inPort(cosLevels, g_global_link_channels, p, p * cosLevels * this->vcCount,
+						g_global_queue_length, g_global_link_transmission_delay, this);
+				this->outPorts[p] = new outPort(this->cosLevels, g_global_link_channels, p, this);
+			}
+			break;
+		case DYNAMIC:
+			/* Injection queues */
+			for (p = 0; p < g_p_computing_nodes_per_router; p++) {
+				this->inPorts[p] = new inPort(cosLevels, g_injection_channels, p, p * cosLevels * this->vcCount,
+						g_injection_queue_length, g_injection_delay, this);
+				this->outPorts[p] = new outPort(this->cosLevels, g_injection_channels, p, this);
+			}
+			/* Local queues */
+			for (p = g_p_computing_nodes_per_router; p < g_global_router_links_offset; p++) {
+				this->inPorts[p] = new dynamicBufferInPort(cosLevels, g_local_link_channels, p,
+						p * cosLevels * this->vcCount, g_local_queue_length / cosLevels / g_local_link_channels,
+						g_local_link_transmission_delay, this, g_local_queue_reserved);
+				outPorts[p] = new dynamicBufferOutPort(this->cosLevels, g_local_link_channels, p, this,
+						g_local_queue_reserved);
+			}
+			/* Global queues */
+			for (p = g_global_router_links_offset; p < g_global_router_links_offset + g_h_global_ports_per_router;
+					p++) {
+				this->inPorts[p] = new dynamicBufferInPort(cosLevels, g_global_link_channels, p,
+						p * cosLevels * this->vcCount, g_global_queue_length / cosLevels / g_global_link_channels,
+						g_global_link_transmission_delay, this, g_global_queue_reserved);
+				outPorts[p] = new dynamicBufferOutPort(this->cosLevels, g_global_link_channels, p, this,
+						g_global_queue_reserved);
+			}
+			break;
 	}
 
 	/* Now we can instantiate arbiters */
 	for (p = 0; p < this->portCount; p++) {
-		this->localArbiters[p] = new localArbiter(p, this);
-		if (g_transit_priority)
-			this->globalArbiters[p] = new priorityGlobalArbiter(p, this->portCount, this);
-		else
-			this->globalArbiters[p] = new globalArbiter(p, this->portCount, this);
+		this->inputArbiters[p] = new inputArbiter(p, cosLevels, this, g_input_arbiter_type);
+		this->outputArbiters[p] = new outputArbiter(p, cosLevels, this->portCount, this, g_output_arbiter_type);
 	}
 }
 
 switchModule::~switchModule() {
 	for (int p = 0; p < this->portCount; p++) {
-		delete localArbiters[p];
-		delete globalArbiters[p];
+		delete inputArbiters[p];
+		delete outputArbiters[p];
 		delete incomingCredits[p];
 		delete inPorts[p];
 		delete outPorts[p];
 	}
-	delete[] localArbiters;
-	delete[] globalArbiters;
+	delete[] inputArbiters;
+	delete[] outputArbiters;
 	delete[] incomingCredits;
-	delete[] lastConsumeCycle;
 	delete[] queueOccupancy;
 	delete[] inPorts;
 	delete[] outPorts;
@@ -182,6 +230,8 @@ switchModule::~switchModule() {
 	delete[] globalQueueOccupancy;
 	delete[] localEscapeQueueOccupancy;
 	delete[] globalEscapeQueueOccupancy;
+	for (int cos = 0; cos < this->cosLevels; cos++)
+		delete[] reservedInPort[cos];
 	delete[] reservedInPort;
 	delete[] reservedOutPort;
 	delete routing;
@@ -198,6 +248,7 @@ void switchModule::resetQueueOccupancy() {
 			this->queueOccupancy[(j * this->vcCount) + i] = 0;
 		}
 	}
+	this->outputQueueOccupancy = 0;
 }
 
 void switchModule::escapeCongested() {
@@ -227,48 +278,40 @@ void switchModule::setQueueOccupancy() {
 	int geq = 0; /* Escape global queue */
 
 	for (p = 0; p < this->portCount; p++) {
-		if ((p < g_p_computing_nodes_per_router)) {
+		if (p < g_p_computing_nodes_per_router) {
 			/* Injection ports */
 			iq++;
 			for (c = 0; c < this->vcCount; c++) {
-				this->injectionQueueOccupancy[c] = this->injectionQueueOccupancy[c]
-						+ this->queueOccupancy[(p * this->vcCount) + c];
+				this->injectionQueueOccupancy[c] += this->queueOccupancy[(p * this->vcCount) + c];
 			}
 		} else {
 			if ((p < g_global_router_links_offset)) {
 				/* Local transit ports */
 				lq++;
 				if (g_deadlock_avoidance == EMBEDDED_RING || g_deadlock_avoidance == EMBEDDED_TREE) {
-//					if (this->pBuffers[p][g_local_link_channels]->bufferCapacity
-//							> 0)
-//						leq++;
+//					if (this->pBuffers[p][g_local_link_channels]->bufferCapacity > 0)
+//											leq++;
 				}
 				for (c = 0; c < vcCount /*g_local_link_channels*/; c++) {
 					this->localQueueOccupancy[c] += +this->queueOccupancy[(p * this->vcCount) + c];
 				}
-//				for (c = g_local_link_channels;
-//						c < (g_local_link_channels + g_channels_escape); c++) {
-//					this->localEscapeQueueOccupancy[c] +=
-//							this->queueOccupancy[(p * this->vcCount) + c];
-//				}
+//				for (c = g_local_link_channels; c < (g_local_link_channels + g_channels_escape); c++) {
+//					this->localEscapeQueueOccupancy[c] += this->queueOccupancy[(p * this->vcCount) + c];
+//								}
 			} else {
 				if (p < (g_global_router_links_offset) + g_h_global_ports_per_router) {
 					/* Global transit ports */
 					gq++;
 					if (g_deadlock_avoidance == EMBEDDED_RING || g_deadlock_avoidance == EMBEDDED_TREE) {
-//						if (this->pBuffers[p][g_local_link_channels]->bufferCapacity
-//								> 0)
-//							geq++;
+//						if (this->pBuffers[p][g_local_link_channels]->bufferCapacity > 0)
+//													geq++;
 					}
 					for (c = 0; c < vcCount /*g_local_link_channels*/; c++) {
 						this->globalQueueOccupancy[c] += this->queueOccupancy[(p * this->vcCount) + c];
 					}
-//					for (c = g_local_link_channels;
-//							c < (g_local_link_channels + g_channels_escape);
-//							c++) {
-//						this->globalEscapeQueueOccupancy[c] +=
-//								this->queueOccupancy[(p * this->vcCount) + c];
-//					}
+//					for (c = g_local_link_channels; c < (g_local_link_channels + g_channels_escape); c++) {
+//						this->globalEscapeQueueOccupancy[c] += this->queueOccupancy[(p * this->vcCount) + c];
+//										}
 				} else {
 					assert(g_rings != 0 && g_deadlock_avoidance == RING);
 					if (((p == this->portCount - 2) && (this->aPos == 0))
@@ -311,60 +354,60 @@ void switchModule::setQueueOccupancy() {
  * and initialized before this.]
  */
 void switchModule::resetCredits() {
-	int thisPort, nextP, chan;
+	int thisPort, nextP, cos, chan, numVCs;
 
 	/* Injection ports (check buffers in local switch) */
-	for (thisPort = 0; thisPort < g_p_computing_nodes_per_router; thisPort++) {
-		for (chan = 0; chan < /*vcCount*/g_injection_channels; chan++) {
-			outPorts[thisPort]->setMaxOccupancy(chan, inPorts[thisPort]->getBufferCapacity(chan) * g_flit_size);
-			/* Sanity check: initial credits must be equal to the buffer capacity (in phits) */
-			assert(switchModule::getCredits(thisPort, chan) == outPorts[thisPort]->getMaxOccupancy(chan));
-		}
-	}
+	for (thisPort = 0; thisPort < g_p_computing_nodes_per_router; thisPort++)
+		for (cos = 0; cos < this->cosLevels; cos++)
+			for (chan = 0; chan < /*vcCount*/g_injection_channels; chan++) {
+				outPorts[thisPort]->setMaxOccupancy(cos, chan,
+						inPorts[thisPort]->getBufferCapacity(cos, chan) * g_flit_size);
+				/* Sanity check: initial credits must be equal to the buffer capacity (in phits) */
+				assert(switchModule::getCredits(thisPort, cos, chan) == outPorts[thisPort]->getMaxOccupancy(cos, chan));
+			}
 
 	/* Transit ports (check buffers in the next switch). We use the first generator
 	 * connected to the next switch to index tableIn, which means:
 	 * switchId * g_p_computing_nodes_per_router (numberOfGeneratorsPerSwitch),
 	 * to find out the input port in the next switch. */
-	for (thisPort = g_p_computing_nodes_per_router; thisPort < g_global_router_links_offset; thisPort++) {
-		int numVCs = g_local_link_channels;
-		for (chan = 0; chan < numVCs; chan++) {
-			nextP = routing->neighPort[thisPort];
-			outPorts[thisPort]->setMaxOccupancy(chan,
-					routing->neighList[thisPort]->inPorts[nextP]->getBufferCapacity(chan) * g_flit_size);
-			/* Sanity check: initial credits must be equal to the buffer capacity (in phits) */
-			assert(switchModule::getCredits(thisPort, chan) == outPorts[thisPort]->getMaxOccupancy(chan));
-		}
-	}
-	for (thisPort = g_global_router_links_offset; thisPort < portCount; thisPort++) {
-		int numVCs = g_global_link_channels;
-		for (chan = 0; chan < numVCs; chan++) {
-			nextP = routing->neighPort[thisPort];
-			outPorts[thisPort]->setMaxOccupancy(chan,
-					routing->neighList[thisPort]->inPorts[nextP]->getBufferCapacity(chan) * g_flit_size);
-			/* Sanity check: initial credits must be equal to the buffer capacity (in phits) */
-			assert(switchModule::getCredits(thisPort, chan) == outPorts[thisPort]->getMaxOccupancy(chan));
-		}
-	}
+	numVCs = (g_vc_usage == FLEXIBLE) ? vcCount : g_local_link_channels;
+	for (thisPort = g_p_computing_nodes_per_router; thisPort < g_global_router_links_offset; thisPort++)
+		for (cos = 0; cos < this->cosLevels; cos++)
+			for (chan = 0; chan < numVCs; chan++) {
+				nextP = routing->neighPort[thisPort];
+				outPorts[thisPort]->setMaxOccupancy(cos, chan,
+						routing->neighList[thisPort]->inPorts[nextP]->getBufferCapacity(cos, chan) * g_flit_size);
+				/* Sanity check: initial credits must be equal to the buffer capacity (in phits) */
+				assert(switchModule::getCredits(thisPort, cos, chan) == outPorts[thisPort]->getMaxOccupancy(cos, chan));
+			}
+	numVCs = (g_vc_usage == FLEXIBLE) ? vcCount : g_global_link_channels;
+	for (thisPort = g_global_router_links_offset; thisPort < portCount; thisPort++)
+		for (cos = 0; cos < this->cosLevels; cos++)
+			for (chan = 0; chan < numVCs; chan++) {
+				nextP = routing->neighPort[thisPort];
+				outPorts[thisPort]->setMaxOccupancy(cos, chan,
+						routing->neighList[thisPort]->inPorts[nextP]->getBufferCapacity(cos, chan) * g_flit_size);
+				/* Sanity check: initial credits must be equal to the buffer capacity (in phits) */
+				assert(switchModule::getCredits(thisPort, cos, chan) == outPorts[thisPort]->getMaxOccupancy(cos, chan));
+			}
 }
 
 int switchModule::getTotalCapacity() {
-	int p, c, totalCapacity = 0;
-	for (p = 0; p < portCount; p++) {
-		for (c = 0; c < vcCount; c++) {
-			totalCapacity = totalCapacity + (inPorts[p]->getBufferCapacity(c));
-		}
-	}
+	int p, c, cos, totalCapacity = 0;
+	for (p = 0; p < portCount; p++)
+		for (cos = 0; cos < this->cosLevels; cos++)
+			for (c = 0; c < vcCount; c++)
+				totalCapacity = totalCapacity + (inPorts[p]->getBufferCapacity(cos, c));
 	return (totalCapacity);
 }
 
 int switchModule::getTotalFreeSpace() {
-	int p, c, totalFreeSpace = 0;
-	for (p = 0; p < portCount; p++) {
-		for (c = 0; c < vcCount; c++) {
-			totalFreeSpace = totalFreeSpace + (inPorts[p]->getSpace(c));
-		}
-	}
+	int p, cos, c, totalFreeSpace = 0;
+	for (p = 0; p < portCount; p++)
+		for (cos = 0; cos < cosLevels; cos++)
+			for (c = 0; c < vcCount; c++)
+				totalFreeSpace = totalFreeSpace + inPorts[p]->getSpace(cos, c);
+
 	return (totalFreeSpace);
 
 }
@@ -374,44 +417,39 @@ int switchModule::getTotalFreeSpace() {
  * Credit count reduction is done in the upstream switch, not here.
  */
 void switchModule::insertFlit(int port, int vc, flitModule *flit) {
-	assert(port < (portCount));
-	assert(vc < (vcCount));
-
-	assert(inPorts[port]->getSpace(vc) >= g_flit_size);
+	assert(port < portCount && port >= g_p_computing_nodes_per_router);
+	assert(vc < vcCount);
+	assert(inPorts[port]->getSpace(flit->cos, vc) >= g_flit_size);
 
 	if (g_contention_aware && (!g_increaseContentionAtHeader)) {
 		m_ca_handler.increaseContention(routing->minOutputPort(flit->destId));
 	}
 	inPorts[port]->insert(vc, flit, g_flit_size);
-
-	return;
 }
 
 /*
  * Insert flit into an injection buffer. Used in INJECTION (from generator).
  */
-void switchModule::injectFlit(int port, int vc, flitModule* flit) {
+void switchModule::injectFlit(int port, int vc, flitModule * flit) {
 	double base_latency;
 	assert((port / g_p_computing_nodes_per_router) < 1);
 	assert((vc / vcCount) < 1 && (vc / g_injection_channels) < 1);
-	assert(switchModule::getCredits(port, vc) >= g_flit_size);
-	if (g_contention_aware && (!g_increaseContentionAtHeader)) {
+	assert(switchModule::getCredits(port, flit->cos, vc) >= g_flit_size);
+	if (g_contention_aware && (!g_increaseContentionAtHeader))
 		m_ca_handler.increaseContention(routing->minOutputPort(flit->destId));
-	}
+	g_tx_flit_counter++;
 	inPorts[port]->insert(vc, flit, g_flit_size);
 
 	/* Calculate message's base latency and record it. */
 	base_latency = calculateBaseLatency(flit);
 	flit->setBaseLatency(base_latency);
-
-	return;
 }
 
-int switchModule::getCredits(int port, int channel) {
+int switchModule::getCredits(int port, unsigned short cos, int channel) {
 	int crdts;
 
-	assert(port < (portCount));
-	assert(channel < (vcCount));
+	assert(port >= 0 && port < portCount);
+	assert(channel >= 0 && channel < vcCount);
 
 	/*
 	 * Two different versions:
@@ -421,16 +459,56 @@ int switchModule::getCredits(int port, int channel) {
 	 */
 	if (port < g_p_computing_nodes_per_router) {
 		// Version 1, used for injection
-		crdts = inPorts[port]->getSpace(channel);
+		crdts = inPorts[port]->getSpace(cos, channel);
 	} else {
 		// Version 2, used for transit
-		crdts = outPorts[port]->getMaxOccupancy(channel) - outPorts[port]->getOccupancy(channel);
+		crdts = outPorts[port]->getMaxOccupancy(cos, channel) - outPorts[port]->getOccupancy(cos, channel);
 	}
+
+	return crdts;
+}
+
+/*
+ * Determines the available space for all the buffers of a given
+ * port and cos. For consumption ports, available space is the sum of
+ * space in the input buffers. For transit ports is calculated as
+ * the number of available credits. If no range of VCs is given,
+ * it will automatically calculate it.
+ */
+int switchModule::getPortCredits(int port, unsigned short cos, vector<int> vc_array) {
+	int crdts = 0, vc;
+	std::vector<int>::iterator it;
+
+	assert(port < portCount);
+	if (vc_array.size() == 0) {
+		if (port < g_p_computing_nodes_per_router) {
+			for (vc = 0; vc < g_injection_channels; vc++)
+				vc_array.push_back(vc);
+		} else if (port < g_global_router_links_offset) {
+			for (vc = 0; vc < g_local_link_channels; vc++)
+				vc_array.push_back(vc);
+		} else {
+			for (vc = 0; vc < g_global_link_channels; vc++)
+				vc_array.push_back(vc);
+		}
+	}
+
+	if (port < g_p_computing_nodes_per_router) {
+		for (it = vc_array.begin(); it != vc_array.end(); ++it) {
+			crdts += inPorts[port]->getSpace(cos, *it);
+		}
+	} else {
+		for (it = vc_array.begin(); it != vc_array.end(); ++it) {
+			crdts += outPorts[port]->getMaxOccupancy(cos, *it) - outPorts[port]->getOccupancy(cos, *it);
+		}
+	}
+
 	return (crdts);
 }
 
-int switchModule::checkConsumePort(int port) {
-	return (g_internal_cycle >= (this->lastConsumeCycle[port] + g_flit_size));
+bool switchModule::checkConsumePort(int port, flitModule * flit) {
+	assert(port >= 0 && port < g_p_computing_nodes_per_router);
+	return g_generators_list[this->label * g_p_computing_nodes_per_router + port]->checkConsume(flit);
 }
 
 /*
@@ -438,41 +516,49 @@ int switchModule::checkConsumePort(int port) {
  * Transit port: based on the local credit count in transit
  * Injection port: based on local buffer real occupancy
  */
-int switchModule::getCreditsOccupancy(int port, int channel) {
+int switchModule::getCreditsOccupancy(int port, unsigned short cos, int channel, int buffer) {
+	assert(port >= 0 && port < portCount);
+	assert(cos >= 0 && cos < this->cosLevels);
+	assert(channel >= 0 && channel < vcCount);
 	int occupancy;
 
 	if (port < g_p_computing_nodes_per_router) {
 		//Injection
-		occupancy = inPorts[port]->getBufferOccupancy(channel);
+		occupancy = inPorts[port]->getBufferOccupancy(cos, channel);
 	} else {
 		//Transit
-		occupancy = outPorts[port]->getTotalOccupancy(channel);
+		occupancy = outPorts[port]->getTotalOccupancy(cos, channel);
 	}
 
 	return occupancy;
 }
 
+int switchModule::getCreditsMinOccupancy(int port, unsigned short cos, int channel) {
+	assert(port >= g_p_computing_nodes_per_router);
+	assert(cos >= 0 && cos < this->cosLevels);
+	return outPorts[port]->getMinOccupancy(cos, channel);
+}
+
 void switchModule::increasePortCount(int port) {
-	assert(port < (portCount));
+	assert(port < portCount);
 	g_port_usage_counter[port]++;
 }
 
 void switchModule::increaseVCCount(int vc, int port) {
-	assert(port < (portCount));
+	assert(port < portCount);
 	g_vc_counter[port - g_local_router_links_offset][vc]++;
 }
 
 void switchModule::increasePortContentionCount(int port) {
-	assert(port < (portCount));
+	assert(port < portCount);
 	g_port_contention_counter[port]++;
 }
 
 void switchModule::orderQueues() {
-	for (int count_ports = 0; count_ports < (this->portCount); count_ports++) {
-		for (int count_channels = 0; count_channels < vcCount; count_channels++) {
-			inPorts[count_ports]->reorderBuffer(count_channels);
-		}
-	}
+	for (int count_ports = 0; count_ports < portCount; count_ports++)
+		for (int cos = 0; cos < this->cosLevels; cos++)
+			for (int count_channels = 0; count_channels < vcCount; count_channels++)
+				inPorts[count_ports]->reorderBuffer(cos, count_channels);
 }
 
 /*
@@ -484,6 +570,7 @@ void switchModule::orderQueues() {
  */
 void switchModule::action() {
 	int p, in_ports_count, out_ports_count, vc, in_req, max_reqs;
+	unsigned short cos;
 	flitModule *flit = NULL;
 
 	max_reqs = g_issue_parallel_reqs ? g_local_arbiter_speedup : 1;
@@ -496,64 +583,67 @@ void switchModule::action() {
 
 	if (g_vc_misrouting_congested_restriction) this->routing->updateCongestionStatusGlobalLinks();
 
-	/* Switch can take several iterations over allocation (local + global arbitration) per cycle.
+	/* Switch can take several iterations over allocation (input + output arbitration) per cycle.
 	 * This helps guaranteeing the attendance of many VCs per channel. */
-	for (g_iteration = 0; g_iteration < (g_allocator_iterations); g_iteration++) {
-
+	for (g_iteration = 0; g_iteration < g_allocator_iterations; g_iteration++) {
 		/* Reset petitions */
-		for (p = 0; p < this->portCount; p++) {
-			this->globalArbiters[p]->initPetitions();
-		}
+		for (p = 0; p < this->portCount; p++)
+			this->outputArbiters[p]->initPetitions();
 
-		/**** Local arbiters execution ****/
-		for (in_ports_count = 0; in_ports_count < (this->portCount); in_ports_count++) {
+		/* Input arbiters execution */
+		for (in_ports_count = 0; in_ports_count < portCount; in_ports_count++) {
 			/* Reset reserved_port trackers */
-			for (p = 0; p < this->portCount; p++) {
+			for (p = 0; p < this->portCount; p++)
 				reservedOutPort[p] = false;
-			}
-			for (p = 0; p < this->vcCount; p++) {
-				reservedInPort[p] = false;
-			}
+
+			for (cos = 0; cos < this->cosLevels; cos++)
+				for (p = 0; p < this->vcCount; p++)
+					reservedInPort[cos][p] = false;
 			/* Injection throttling: when using escape subnetwork as deadlock avoidance mechanism,
 			 * injection is prevented if subnet becomes congested. */
 			if ((!(in_ports_count < g_p_computing_nodes_per_router && this->escapeNetworkCongested))) {
-				/* Local arbiter selects an input to advance and makes a petition to global arbiter */
+				/* Input arbiter selects an input to advance and makes a petition to output arbiter */
 				for (in_req = 0; in_req < max_reqs; in_req++) {
-					vc = this->localArbiters[in_ports_count]->action();
+					vc = this->inputArbiters[in_ports_count]->action();
 					if (vc != -1) {
 						// Make petition
-						flit = getFlit(in_ports_count, vc);
+						cos = this->inputArbiters[in_ports_count]->getCurCos();
+						flit = getFlit(in_ports_count, cos, vc);
+						assert(cos == flit->cos);
 						if (reservedOutPort[flit->nextP]) continue;
 						reservedOutPort[flit->nextP] = true;
-						reservedInPort[vc] = true;
-						this->globalArbiters[flit->nextP]->petitions[in_ports_count] = 1;
-						this->globalArbiters[flit->nextP]->inputChannels[in_ports_count] = vc;
-						this->globalArbiters[flit->nextP]->nextChannels[in_ports_count] = flit->nextVC;
-						this->globalArbiters[flit->nextP]->nextPorts[in_ports_count] = routing->neighPort[flit->nextP];
+						reservedInPort[cos][vc] = true;
+						this->outputArbiters[flit->nextP]->petitions[in_ports_count] = 1;
+						this->outputArbiters[flit->nextP]->inputChannels[in_ports_count] = vc;
+						this->outputArbiters[flit->nextP]->inputCos[in_ports_count] = cos;
+						this->outputArbiters[flit->nextP]->nextChannels[in_ports_count] = flit->nextVC;
+						this->outputArbiters[flit->nextP]->nextPorts[in_ports_count] = routing->neighPort[flit->nextP];
 					}
 				}
 			}
 		}
-		/**** Global arbiters execution ****/
-		for (out_ports_count = 0; out_ports_count < (this->portCount); out_ports_count++) {
-			in_ports_count = this->globalArbiters[out_ports_count]->action();
+		/* Output arbiters execution */
+		for (out_ports_count = 0; out_ports_count < this->portCount; out_ports_count++) {
+			in_ports_count = this->outputArbiters[out_ports_count]->action();
 			if (in_ports_count != -1) {
 				// Attends petition (consumes packet or sends it through 'sendFlit')
-				vc = this->globalArbiters[out_ports_count]->inputChannels[in_ports_count];
-				sendFlit(in_ports_count, vc, out_ports_count, routing->neighPort[out_ports_count],
-						this->globalArbiters[out_ports_count]->nextChannels[in_ports_count]);
+				vc = this->outputArbiters[out_ports_count]->inputChannels[in_ports_count];
+				cos = this->outputArbiters[out_ports_count]->inputCos[in_ports_count];
+				sendFlit(in_ports_count, cos, vc, out_ports_count, routing->neighPort[out_ports_count],
+						this->outputArbiters[out_ports_count]->nextChannels[in_ports_count]);
 			}
 		}
 	}
 
-	for (int p = 0; p < (portCount); p++) {
-		for (int vc = 0; vc < (this->vcCount); vc++) {
-			this->queueOccupancy[p * vcCount + vc] = this->queueOccupancy[p * vcCount + vc]
-					+ this->inPorts[p]->getBufferOccupancy(vc);
-		}
-	}
-
+	for (int p = 0; p < portCount; p++)
+		for (unsigned short cos = 0; cos < this->cosLevels; cos++)
+			for (int vc = 0; vc < (this->vcCount); vc++)
+				this->queueOccupancy[p * vcCount + vc] += this->inPorts[p]->getBufferOccupancy(cos, vc);
 	orderQueues();
+
+	if (g_cycle >= g_warmup_cycles + g_max_cycles - 100
+			&& g_cycle < g_warmup_cycles + g_max_cycles - 100 + g_verbose_cycles
+			&& g_verbose_switches.find(this->label) != g_verbose_switches.end()) this->printSwitchStatus();
 }
 
 /*
@@ -572,7 +662,8 @@ void switchModule::updateCredits() {
 			 * queue, update credit counter and delete checked flit by
 			 * popping oldest creditFlit in the queue. */
 			const creditFlit& flit = incomingCredits[port]->front();
-			outPorts[port]->decreaseOccupancy(flit.getVc(), flit.getNumCreds());
+			outPorts[port]->decreaseOccupancy(flit.getCos(), flit.getVc(), flit.getNumCreds());
+			outPorts[port]->decreaseMinOccupancy(flit.getCos(), flit.getVc(), flit.getNumMinCreds());
 #if DEBUG
 			cout << flit.getArrivalCycle() << " cycle--> switch " << label << "(Port " << port << ", VC "
 			<< flit.getVc() << "): +" << flit.getNumCreds() << " credits = "
@@ -591,33 +682,99 @@ void switchModule::updateCredits() {
  * switches within the group.
  */
 void switchModule::updatePb() {
-
-	double qMean = 0.0; // Mean global queue occupancy
-	int port, channel, threshold;
+	double qMean, qCur; /* Mean global queue occupancy */
+	int port, channel, threshold, vc;
+	unsigned short cos;
 	bool isCongested;
 	pbFlit *flit;
 
-	/* Calculate and update congestion state for EACH CHANNEL */
-	for (channel = 0; channel < g_global_link_channels; channel++) {
-		/* LOCAL INFO: current switch global links. Calculate qMean*/
-		qMean = 0;
-		for (port = g_global_router_links_offset; port < g_global_router_links_offset + g_h_global_ports_per_router;
-				port++) {
-			qMean += switchModule::getCreditsOccupancy(port, channel);
-		}
-		qMean = qMean / (g_h_global_ports_per_router);
+	/* Calculate and update congestion state for EACH COS and EACH CHANNEL */
+	for (cos = 0; cos < this->cosLevels; cos++) {
+		qMean = 0.0;
+		qCur = 0.0;
+		if (g_congestion_detection == PER_PORT || g_congestion_detection == PER_PORT_MIN) {
+			/* Calculate and update congestion state for EACH PORT */
+			for (port = g_global_router_links_offset; port < g_global_router_links_offset + g_h_global_ports_per_router;
+					port++) {
+				for (channel = 0; channel < g_global_link_channels; channel++) {
+					if (g_vc_usage == BASE)
+						vc = channel;
+					else if (g_reactive_traffic)
+						vc = routing->globalResVc[channel];
+					else
+						vc = routing->globalVc[channel];
 
-		/* Update values */
-		for (port = g_global_router_links_offset; port < g_global_router_links_offset + g_h_global_ports_per_router;
-				port++) {
-			threshold = g_piggyback_coef / 100.0 * qMean + g_ugal_global_threshold * g_flit_size;
-			isCongested = switchModule::getCreditsOccupancy(port, channel) > threshold;
-			piggyBack.update(port, channel, isCongested);
+					if (g_congestion_detection == PER_PORT_MIN)
+						qMean += switchModule::getCreditsMinOccupancy(port, cos, vc);
+					else
+						qMean += switchModule::getCreditsOccupancy(port, cos, vc);
+				}
+			}
+			qMean /= (g_h_global_ports_per_router * g_global_link_channels);
+			for (port = g_global_router_links_offset; port < g_global_router_links_offset + g_h_global_ports_per_router;
+					port++) {
+				threshold = g_piggyback_coef / 100.0 * qMean + g_ugal_global_threshold * g_flit_size;
+				qCur = 0;
+				for (channel = 0; channel < g_global_link_channels; channel++) {
+					if (g_vc_usage == BASE)
+						vc = channel;
+					else if (g_reactive_traffic)
+						vc = routing->globalResVc[channel];
+					else
+						vc = routing->globalVc[channel];
+
+					if (g_congestion_detection == PER_PORT_MIN)
+						qCur += switchModule::getCreditsMinOccupancy(port, cos, vc);
+					else
+						qCur += switchModule::getCreditsOccupancy(port, cos, vc);
+				}
+				isCongested = (qCur / g_global_link_channels) > threshold;
+				piggyBack.update(port, cos, 0, isCongested);
+			}
+		} else if (g_congestion_detection == PER_VC || g_congestion_detection == PER_VC_MIN) {
+			/* Calculate and update congestion state for EACH CHANNEL */
+			for (channel = 0; channel < g_global_link_channels; channel++) {
+				/* LOCAL INFO: current switch global links. Calculate qMean*/
+				qMean = 0;
+				for (port = g_global_router_links_offset;
+						port < g_global_router_links_offset + g_h_global_ports_per_router; port++) {
+					if (g_vc_usage == BASE)
+						vc = channel;
+					else if (g_reactive_traffic)
+						vc = routing->globalResVc[channel];
+					else
+						vc = routing->globalVc[channel];
+
+					if (g_congestion_detection == PER_VC_MIN)
+						qMean += switchModule::getCreditsMinOccupancy(port, cos, vc);
+					else
+						qMean += switchModule::getCreditsOccupancy(port, cos, vc);
+				}
+				qMean = qMean / g_h_global_ports_per_router;
+
+				/* Update values */
+				for (port = g_global_router_links_offset;
+						port < g_global_router_links_offset + g_h_global_ports_per_router; port++) {
+					threshold = g_piggyback_coef / 100.0 * qMean + g_ugal_global_threshold * g_flit_size;
+					if (g_vc_usage == BASE)
+						vc = channel;
+					else if (g_reactive_traffic)
+						vc = routing->globalResVc[channel];
+					else
+						vc = routing->globalVc[channel];
+
+					if (g_congestion_detection == PER_VC_MIN)
+						isCongested = switchModule::getCreditsMinOccupancy(port, cos, vc) > threshold;
+					else
+						isCongested = switchModule::getCreditsOccupancy(port, cos, vc) > threshold;
+					piggyBack.update(port, cos, channel, isCongested);
 #if DEBUG
-			cout << "(PB UPDATE) SW " << label << " Port " << port << ": Q= " << getCreditsOccupancy(port, channel)
-			<< " Threshold=" << threshold << endl;
-			if (isCongested) cout << "SW " << label << " Port " << port << " is CONGESTED" << endl;
+					cout << "(PB UPDATE) SW " << label << " Port " << port << ": Q= " << getCreditsOccupancy(port, channel)
+					<< " Threshold=" << threshold << endl;
+					if (isCongested) cout << "SW " << label << " Port " << port << " is CONGESTED" << endl;
 #endif
+				}
+			}
 		}
 	}
 
@@ -654,7 +811,7 @@ void switchModule::updateReadPb() {
  * Send credits to the upstream switch associated to the given input port and channel.
  * Does nothing for injection ports.
  */
-void switchModule::sendCredits(int port, int channel, int flitId) {
+void switchModule::sendCredits(int port, unsigned short cos, int channel, flitModule * flit) {
 
 	int neighInputPort;
 	float latency;
@@ -663,14 +820,15 @@ void switchModule::sendCredits(int port, int channel, int flitId) {
 		return;
 	}
 
-	latency = inPorts[port]->getDelay(channel);
-	creditFlit flit(g_internal_cycle + latency, g_flit_size, channel, flitId);
+	latency = inPorts[port]->getDelay(cos, channel);
+	int minSize = (!flit->getPrevMisrouted()) * g_flit_size;
+	creditFlit crdFlit(g_internal_cycle + latency, g_flit_size, minSize, cos, channel, flit->flitId);
 	neighInputPort = routing->neighPort[port];
 #if DEBUG
 	cout << g_cycle << " cycle--> switch " << label << ": (message " << flitId << " ) sending CREDITS to sw "
 	<< routing->neighList[port]->label << "(Port " << neighInputPort << ", VC " << channel << ")" << endl;
 #endif
-	routing->neighList[port]->receiveCreditFlit(neighInputPort, flit);
+	routing->neighList[port]->receiveCreditFlit(neighInputPort, crdFlit);
 }
 
 /*
@@ -711,6 +869,19 @@ bool switchModule::isGlobalLinkCongested(const flitModule * flit) {
 	outP = routing->minOutputPort(dest);
 	neigh = routing->neighList[outP];
 
+	int vc;
+	if (g_congestion_detection == PER_PORT || g_congestion_detection == PER_PORT_MIN)
+		vc = 0;
+	else {
+		if (g_vc_usage == FLEXIBLE)
+			vc = g_global_link_channels - 1;
+		else {
+			if (flit->flitType == RESPONSE && g_reactive_traffic)
+				vc = 2;
+			else
+				vc = 0;
+		}
+	}
 	/* Find destination in following order:
 	 * -Check in current switch.
 	 * -Check in current group.
@@ -724,12 +895,12 @@ bool switchModule::isGlobalLinkCongested(const flitModule * flit) {
 		result = false;
 	} else if ((outP >= g_global_router_links_offset)) {
 		globalLinkId = port2groupGlobalLinkID(outP, aPos);
-		result = piggyBack.isCongested(globalLinkId, 0);
+		result = piggyBack.isCongested(globalLinkId, flit->cos, vc);
 	} else if ((outP < g_global_router_links_offset) && (outP >= g_local_router_links_offset)
 			&& (neigh->routing->minOutputPort(dest) >= g_global_router_links_offset)) {
 		port = neigh->routing->minOutputPort(dest);
 		globalLinkId = port2groupGlobalLinkID(port, routing->neighList[outP]->aPos);
-		result = piggyBack.isCongested(globalLinkId, 0);
+		result = piggyBack.isCongested(globalLinkId, flit->cos, vc);
 	} else { /* ERROR: THIS SHALL NOT HAPPEN */
 #if DEBUG
 		cout << "Source " << flit->sourceId << " sw " << label << " Dest " << dest << " sw " << flit->destSwitch
@@ -757,7 +928,7 @@ double switchModule::calculateBaseLatency(const flitModule * flit) {
 	while (current_sw->label != dest_sw) {
 		outP = current_sw->routing->minOutputPort(dest);
 		assert(outP >= 0);
-		current_latency = (double) (current_sw->inPorts[outP]->getDelay(0));
+		current_latency = (double) (current_sw->inPorts[outP]->getDelay(flit->cos, 0));
 		base_latency += current_latency; /* Add output link delay */
 		current_sw = current_sw->routing->neighList[outP]; /* Advance to next switch */
 	}
@@ -772,27 +943,25 @@ double switchModule::calculateBaseLatency(const flitModule * flit) {
  * Checks if an input port is ready to receive a flit.
  */
 bool switchModule::nextPortCanReceiveFlit(int port) {
-	bool can_receive_flit = true;
+	assert(port >= g_p_computing_nodes_per_router);
+	bool canReceiveFlit = true;
 
-	if (port < g_p_computing_nodes_per_router)
-		can_receive_flit = (g_internal_cycle >= (this->lastConsumeCycle[port] + g_flit_size));
-	else {
-		int nextPort = routing->neighPort[port];
-		switchModule * nextSw = routing->neighList[port];
-		for (int k = 0; k < g_channels; k++) {
-			can_receive_flit = can_receive_flit && nextSw->inPorts[nextPort]->canReceiveFlit(k);
-		}
-	}
-	return can_receive_flit;
+	int nextPort = routing->neighPort[port];
+	switchModule * nextSw = routing->neighList[port];
+	for (int cos = 0; cos < this->cosLevels; cos++)
+		for (int vc = 0; vc < g_channels; vc++)
+			canReceiveFlit &= nextSw->inPorts[nextPort]->canReceiveFlit(cos, vc);
+
+	return canReceiveFlit;
 }
 
 /*
  * Retrieves head-of-buffer flit for a given combination of
- * input port and virtual channel.
+ * input port, cos level and virtual channel.
  */
-flitModule * switchModule::getFlit(int port, int vc) {
+flitModule * switchModule::getFlit(int port, unsigned short cos, int vc) {
 	flitModule *flitEx;
-	inPorts[port]->checkFlit(vc, flitEx);
+	inPorts[port]->checkFlit(cos, vc, flitEx);
 	assert(flitEx != NULL);
 	return flitEx;
 }
@@ -801,231 +970,21 @@ flitModule * switchModule::getFlit(int port, int vc) {
  * Returns current set output port (when flit is part of the
  * body of a packet)
  */
-int switchModule::getCurrentOutPort(int port, int vc) {
-	return inPorts[port]->getOutCurPkt(vc);
+int switchModule::getCurrentOutPort(int port, unsigned short cos, int vc) {
+	return inPorts[port]->getOutCurPkt(cos, vc);
 }
 
 /*
  * Returns current set output channel (when flit is part of
  * the body of a packet)
  */
-int switchModule::getCurrentOutVC(int port, int vc) {
-	return inPorts[port]->getNextVcCurPkt(vc);
+int switchModule::getCurrentOutVC(int port, unsigned short cos, int vc) {
+	return inPorts[port]->getNextVcCurPkt(cos, vc);
 }
 
 bool switchModule::isVCUnlocked(flitModule * flit, int port, int vc) {
-	return (routing->neighList[port]->inPorts[routing->neighPort[port]]->unLocked(vc)
-			|| flit->packetId == routing->neighList[port]->inPorts[routing->neighPort[port]]->getPktLock(vc));
-}
-
-void switchModule::trackConsumptionStatistics(flitModule *flitEx, int input_port, int input_channel, int outP) {
-	long double flitExLatency = 0, packet_latency = 0;
-	int k;
-	float in_cycle;
-	generatorModule * src_generator;
-#if DEBUG
-	if (flitEx->destSwitch != this->label) {
-		cout << "ERROR in flit " << flitEx->flitId << " at sw " << this->label << ", rx from input " << input_port
-		<< " to out " << outP << "; sourceSw " << flitEx->sourceSW << ", destSw " << flitEx->destSwitch << endl;
-	}
-#endif
-	assert(flitEx->destSwitch == this->label);
-
-	if (input_port < g_p_computing_nodes_per_router) {
-		assert(flitEx->injLatency < 0);
-		flitEx->injLatency = g_internal_cycle - flitEx->inCycle;
-		assert(flitEx->injLatency >= 0);
-	}
-
-	assert(flitEx->localContentionCount >= 0);
-	assert(flitEx->globalContentionCount >= 0);
-	assert(flitEx->localEscapeContentionCount >= 0);
-	assert(flitEx->globalEscapeContentionCount >= 0);
-
-	if (flitEx->tail == 1) g_rx_packet_counter += 1;
-	g_rx_flit_counter += 1;
-	g_total_hop_counter += flitEx->hopCount;
-	g_local_hop_counter += flitEx->localHopCount;
-	g_global_hop_counter += flitEx->globalHopCount;
-	g_local_ring_hop_counter += flitEx->localEscapeHopCount;
-	g_global_ring_hop_counter += flitEx->globalEscapeHopCount;
-	g_local_tree_hop_counter += flitEx->localEscapeHopCount;
-	g_global_tree_hop_counter += flitEx->globalEscapeHopCount;
-	g_subnetwork_injections_counter += flitEx->subnetworkInjectionsCount;
-	g_root_subnetwork_injections_counter += flitEx->rootSubnetworkInjectionsCount;
-	g_source_subnetwork_injections_counter += flitEx->sourceSubnetworkInjectionsCount;
-	g_dest_subnetwork_injections_counter += flitEx->destSubnetworkInjectionsCount;
-	g_local_contention_counter += flitEx->localContentionCount;
-	g_global_contention_counter += flitEx->globalContentionCount;
-	g_local_escape_contention_counter += flitEx->localEscapeContentionCount;
-	g_global_escape_contention_counter += flitEx->globalEscapeContentionCount;
-
-	if (g_internal_cycle >= g_warmup_cycles) {
-		g_base_latency += flitEx->getBaseLatency();
-	}
-
-	this->lastConsumeCycle[outP] = g_internal_cycle;
-	flitExLatency = g_internal_cycle - flitEx->inCycle + g_flit_size;
-
-	if (flitEx->tail == 1) {
-		packet_latency = g_internal_cycle - flitEx->inCyclePacket + g_flit_size;
-		assert(packet_latency >= 1);
-	}
-
-	long double lat = flitEx->injLatency\
-
-			+ (flitEx->localHopCount + flitEx->localEscapeHopCount) * g_local_link_transmission_delay
-			+ (flitEx->globalHopCount + flitEx->globalEscapeHopCount) * g_global_link_transmission_delay
-			+ flitEx->localContentionCount + flitEx->globalContentionCount + flitEx->localEscapeContentionCount
-			+ flitEx->globalEscapeContentionCount;
-	assert(flitExLatency == lat + g_flit_size);
-
-	/* Latency HISTOGRAM */
-	if (g_internal_cycle >= g_warmup_cycles) {
-		if (flitEx->head == 1) {
-			/* If new latency value exceeds current max histogram value,
-			 * enlarge vectors to fit new values. */
-			if (flitExLatency >= g_latency_histogram_maxLat) {
-				g_latency_histogram_no_global_misroute.insert(g_latency_histogram_no_global_misroute.end(),
-						flitExLatency + 1 - g_latency_histogram_maxLat, 0);
-				g_latency_histogram_global_misroute_at_injection.insert(
-						g_latency_histogram_global_misroute_at_injection.end(),
-						flitExLatency + 1 - g_latency_histogram_maxLat, 0);
-				g_latency_histogram_other_global_misroute.insert(g_latency_histogram_other_global_misroute.end(),
-						flitExLatency + 1 - g_latency_histogram_maxLat, 0);
-				g_latency_histogram_maxLat = flitExLatency + 1;
-				assert(g_latency_histogram_no_global_misroute.size() == g_latency_histogram_maxLat);
-				assert(g_latency_histogram_global_misroute_at_injection.size() == g_latency_histogram_maxLat);
-				assert(g_latency_histogram_other_global_misroute.size() == g_latency_histogram_maxLat);
-			}
-
-			if (not (g_routing == PAR || g_routing == RLM || g_routing == OLM)) {
-				/* If NOT using vc misrouting, store all latency values in a single histogram. */
-				g_latency_histogram_other_global_misroute[int(flitExLatency)]++;
-			} /* Otherwise, split into three: */
-			else if (flitEx->globalHopCount <= 1) {
-				//1- NO GLOBAL MISROUTE
-				assert(flitEx->hopCount <= 5);
-				assert(flitEx->localHopCount <= 4);
-				assert(flitEx->globalHopCount <= 1);
-				assert(flitEx->getMisrouteCount(GLOBAL) == 0);
-				assert(flitEx->getMisrouteCount(GLOBAL_MANDATORY) == 0);
-				g_latency_histogram_no_global_misroute[int(flitExLatency)]++;
-			} else if (flitEx->isGlobalMisrouteAtInjection()) {
-				//2- GLOBAL MISROUTING AT INJECTION
-				assert(flitEx->getMisrouteCount(NONE) >= 1 && flitEx->getMisrouteCount(NONE) <= 3);
-				assert(flitEx->getMisrouteCount(GLOBAL) == 1);
-				assert(flitEx->hopCount <= 6);
-				assert(flitEx->localHopCount <= 4);
-				assert(flitEx->globalHopCount == 2);
-				assert(flitEx->getMisrouteCount(GLOBAL_MANDATORY) == 0);
-				g_latency_histogram_global_misroute_at_injection[int(flitExLatency)]++;
-			} else {
-				//3- OTHER GLOBAL MISROUTE (after local hop in source group)
-				assert(flitEx->getMisrouteCount(NONE) >= 1 && flitEx->getMisrouteCount(NONE) <= 4);
-				assert(flitEx->getMisrouteCount(GLOBAL) == 1);
-				assert(flitEx->hopCount <= 8);
-				assert(flitEx->localHopCount <= 6);
-				assert(flitEx->globalHopCount == 2);
-				g_latency_histogram_other_global_misroute[int(flitExLatency)]++;
-			}
-		}
-	}
-
-	if ((g_internal_cycle >= g_warmup_cycles) && (flitEx->hopCount < g_hops_histogram_maxHops) && (flitEx->head == 1)) {
-		g_hops_histogram[flitEx->hopCount]++;
-	}
-
-	/* Group 0, per switch averaged latency */
-	if ((g_internal_cycle >= g_warmup_cycles) && (flitEx->sourceGroup == 0)) {
-		assert(flitEx->sourceSW < g_a_routers_per_group);
-		g_group0_numFlits[flitEx->sourceSW]++;
-		g_group0_totalLatency[flitEx->sourceSW] += lat;
-	}
-	/* Group ROOT, per switch averaged latency */
-	if (/*(g_trees>0)&&*/(g_internal_cycle >= g_warmup_cycles) && (flitEx->sourceGroup == g_tree_root_switch)) {
-		assert(
-				(flitEx->sourceSW >= g_a_routers_per_group * g_tree_root_switch)
-						&& (flitEx->sourceSW < g_a_routers_per_group * (g_tree_root_switch + 1)));
-		g_groupRoot_numFlits[flitEx->sourceSW - g_a_routers_per_group * g_tree_root_switch]++;
-		g_groupRoot_totalLatency[flitEx->sourceSW - g_a_routers_per_group * g_tree_root_switch] += lat;
-	}
-
-	g_flit_latency += flitExLatency;
-	assert(g_flit_latency >= 0);
-
-	if (flitEx->tail == 1) g_packet_latency += packet_latency;
-
-	assert(flitEx->injLatency >= 0);
-	g_injection_queue_latency += flitEx->injLatency;
-	assert(g_injection_queue_latency >= 0);
-
-	//Transient traffic recording
-	if (g_transient_stats) {
-		in_cycle = flitEx->inCycle;
-
-		//cycle within recording range
-		if ((in_cycle >= g_warmup_cycles + g_transient_traffic_cycle - g_transient_record_num_prev_cycles)
-				&& (in_cycle < g_warmup_cycles + g_transient_traffic_cycle + g_transient_record_num_cycles)) {
-
-			//calculate record index
-			k = int(in_cycle - (g_warmup_cycles + g_transient_traffic_cycle - g_transient_record_num_prev_cycles));
-			assert(k < g_transient_record_len);
-
-			//record Transient traffic data
-			g_transient_record_flits[k] += 1;
-			g_transient_record_latency[k] += g_internal_cycle - flitEx->inCycle;
-			g_transient_record_injection_latency[k] += flitEx->injLatency;
-			if (flitEx->getMisrouteCount(GLOBAL) > 0 || flitEx->getCurrentMisrouteType() == VALIANT) {
-				g_transient_record_misrouted_flits[k] += 1;
-			}
-
-			//Repeat transient record but considering injection to network time
-			k = int(
-					in_cycle + flitEx->injLatency
-							- (g_warmup_cycles + g_transient_traffic_cycle - g_transient_record_num_prev_cycles));
-
-			if (k < g_transient_record_len) {
-				g_transient_net_injection_flits[k]++;
-				g_transient_net_injection_latency[k] += g_internal_cycle - flitEx->inCycle;
-				g_transient_net_injection_inj_latency[k] += flitEx->injLatency;
-				if (flitEx->getMisrouteCount(GLOBAL) > 0 || flitEx->getCurrentMisrouteType() == VALIANT) {
-					g_transient_net_injection_misrouted_flits[k] += 1;
-				}
-			}
-		}
-	}
-
-	switch (g_traffic) {
-		case SINGLE_BURST:
-			/* BURST/ALL-TO-ALL traffic:
-			 * -Locate source generator.
-			 * -Count flit as received
-			 * -If all generator messages have been
-			 * received, count generator as finished
-			 */
-			src_generator = g_generators_list[flitEx->sourceId];
-			src_generator->pattern->flitRx();
-			if (src_generator->pattern->isGenerationFinished()) {
-				g_burst_generators_finished_count++;
-			}
-			break;
-		case ALL2ALL:
-			src_generator = g_generators_list[flitEx->sourceId];
-			src_generator->pattern->flitRx();
-			if (src_generator->pattern->isGenerationFinished()) {
-				g_AllToAll_generators_finished_count++;
-			}
-			break;
-		case TRACE:
-			/* TRACE support: add event to an occurred event's list */
-			g_generators_list[flitEx->destId]->insertOccurredEvent(flitEx);
-			break;
-	}
-
-	/* Send credits to previous switch */
-	sendCredits(input_port, input_channel, flitEx->flitId);
-	increasePortCount(outP);
+	return (routing->neighList[port]->inPorts[routing->neighPort[port]]->unLocked(flit->cos, vc)
+			|| flit->packetId == routing->neighList[port]->inPorts[routing->neighPort[port]]->getPktLock(flit->cos, vc));
 }
 
 void switchModule::trackTransitStatistics(flitModule *flitEx, int input_channel, int outP, int nextC) {
@@ -1099,7 +1058,8 @@ void switchModule::updateMisrouteCounters(int outP, flitModule * flitEx) {
  * Makes effective flit transferal from one buffer to another. If flit is to be consumed, tracks
  * its statistics and deletes it.
  */
-void switchModule::sendFlit(int input_port, int input_channel, int outP, int nextP, int nextC) {
+void switchModule::sendFlit(int input_port, unsigned short cos, int input_channel, int outP, int nextP, int nextC) {
+	assert(outP >= 0 && outP < this->portCount);
 	flitModule *flitEx;
 	bool nextVC_unLocked, input_emb_escape = false, output_emb_escape = false, input_phy_ring = false, output_phy_ring =
 			false, subnetworkInjection = false;
@@ -1117,40 +1077,38 @@ void switchModule::sendFlit(int input_port, int input_channel, int outP, int nex
 
 	assert(nextC >= 0 && nextC < vcCount);
 
-	inPorts[input_port]->checkFlit(input_channel, flitEx);
-	assert(inPorts[input_port]->canSendFlit(input_channel));
-	assert(inPorts[input_port]->extract(input_channel, flitEx, g_flit_size));
+	inPorts[input_port]->checkFlit(cos, input_channel, flitEx);
+	assert(inPorts[input_port]->canSendFlit(cos, input_channel));
+	assert(inPorts[input_port]->extract(cos, input_channel, flitEx, g_flit_size));
 
 	if (g_contention_aware && (!g_increaseContentionAtHeader)) {
 		m_ca_handler.decreaseContention(routing->minOutputPort(flitEx->destId));
 	}
 
 	if (flitEx->head == 1) {
-		inPorts[input_port]->setCurPkt(input_channel, flitEx->packetId);
-		inPorts[input_port]->setOutCurPkt(input_channel, outP);
-		inPorts[input_port]->setNextVcCurPkt(input_channel, nextC);
+		inPorts[input_port]->setCurPkt(cos, input_channel, flitEx->packetId);
+		inPorts[input_port]->setOutCurPkt(cos, input_channel, outP);
+		inPorts[input_port]->setNextVcCurPkt(cos, input_channel, nextC);
 	}
-	assert(flitEx->packetId == inPorts[input_port]->getCurPkt(input_channel));
+	assert(flitEx->packetId == inPorts[input_port]->getCurPkt(cos, input_channel));
 	if (flitEx->tail == 1) {
-		inPorts[input_port]->setCurPkt(input_channel, -1);
-		inPorts[input_port]->setOutCurPkt(input_channel, -1);
-		inPorts[input_port]->setNextVcCurPkt(input_channel, -1);
+		inPorts[input_port]->setCurPkt(cos, input_channel, -1);
+		inPorts[input_port]->setOutCurPkt(cos, input_channel, -1);
+		inPorts[input_port]->setNextVcCurPkt(cos, input_channel, -1);
 	}
 	assert(flitEx != NULL);
+
+	/* Send credits to previous switch */
+	sendCredits(input_port, cos, input_channel, flitEx);
 
 	/* Update contention counters (time waiting in queues) */
 	flitEx->addContention(input_port, this->label);
 
 	if (outP < g_p_computing_nodes_per_router) {
-		/* Pkt is consumed */
-#if DEBUG
-		cout << "Tx pkt " << flitEx->flitId << " from source " << flitEx->sourceId << " (sw " << flitEx->sourceSW
-		<< ", group " << flitEx->sourceGroup << ") to dest " << flitEx->destId << " (sw " << flitEx->destSwitch
-		<< ", group " << flitEx->destGroup << "). Consuming pkt in node " << outP << endl;
-#endif
-		assert(g_internal_cycle >= (this->lastConsumeCycle[outP] + g_flit_size));
-		trackConsumptionStatistics(flitEx, input_port, input_channel, outP);
-		delete flitEx;
+		if (g_generators_list[this->label * g_p_computing_nodes_per_router + outP]->checkConsume(flitEx))
+			/* Pkt is consumed */
+			g_generators_list[this->label * g_p_computing_nodes_per_router + outP]->consumeFlit(flitEx, input_port,
+					input_channel);
 	} else {
 		/* Pkt is transmitted */
 #if DEBUG
@@ -1168,34 +1126,30 @@ void switchModule::sendFlit(int input_port, int input_channel, int outP, int nex
 					<< routing->neighPort[outP] << " is not available." << endl;
 		assert(this->nextPortCanReceiveFlit(outP));
 		/* Check VC is unlocked */
-		if (routing->neighList[outP]->inPorts[routing->neighPort[outP]]->unLocked(nextC)) {
+		if (routing->neighList[outP]->inPorts[routing->neighPort[outP]]->unLocked(flitEx->cos, nextC)) {
 			nextVC_unLocked = true;
-		} else if (flitEx->packetId == routing->neighList[outP]->inPorts[routing->neighPort[outP]]->getPktLock(nextC)) {
+		} else if (flitEx->packetId
+				== routing->neighList[outP]->inPorts[routing->neighPort[outP]]->getPktLock(flitEx->cos, nextC)) {
 			nextVC_unLocked = true;
 		} else {
 			nextVC_unLocked = false;
 		}
 		assert(nextVC_unLocked);
 
-		assert(getCredits(outP, nextC) >= g_flit_size);
-
-		outPorts[outP]->insert(nextC, flitEx, g_flit_size);
-
-		/* Decrement credit counter in local switch and send credits to previous switch. */
-		sendCredits(input_port, input_channel, flitEx->flitId);
+		assert(getCredits(outP, cos, nextC) >= g_flit_size);
 
 		if (flitEx->head == 1) {
-			routing->neighList[outP]->inPorts[nextP]->setPktLock(nextC, flitEx->packetId);
-			routing->neighList[outP]->inPorts[nextP]->setPortPktLock(nextC, input_port);
-			routing->neighList[outP]->inPorts[nextP]->setVcPktLock(nextC, input_channel);
-			routing->neighList[outP]->inPorts[nextP]->setUnlocked(nextC, 0);
+			routing->neighList[outP]->inPorts[nextP]->setPktLock(cos, nextC, flitEx->packetId);
+			routing->neighList[outP]->inPorts[nextP]->setPortPktLock(cos, nextC, input_port);
+			routing->neighList[outP]->inPorts[nextP]->setVcPktLock(cos, nextC, input_channel);
+			routing->neighList[outP]->inPorts[nextP]->setUnlocked(cos, nextC, 0);
 		}
-		assert(flitEx->packetId == routing->neighList[outP]->inPorts[nextP]->getPktLock(nextC));
+		assert(flitEx->packetId == routing->neighList[outP]->inPorts[nextP]->getPktLock(cos, nextC));
 		if (flitEx->tail == 1) {
-			routing->neighList[outP]->inPorts[nextP]->setPktLock(nextC, -1);
-			routing->neighList[outP]->inPorts[nextP]->setPortPktLock(nextC, -1);
-			routing->neighList[outP]->inPorts[nextP]->setVcPktLock(nextC, -1);
-			routing->neighList[outP]->inPorts[nextP]->setUnlocked(nextC, 1);
+			routing->neighList[outP]->inPorts[nextP]->setPktLock(cos, nextC, -1);
+			routing->neighList[outP]->inPorts[nextP]->setPortPktLock(cos, nextC, -1);
+			routing->neighList[outP]->inPorts[nextP]->setVcPktLock(cos, nextC, -1);
+			routing->neighList[outP]->inPorts[nextP]->setUnlocked(cos, nextC, 1);
 		}
 		switch (g_deadlock_avoidance) {
 			case RING:
@@ -1270,21 +1224,39 @@ void switchModule::sendFlit(int input_port, int input_channel, int outP, int nex
 			 * global mandatory misrouting (to prevent the appearence of cycles). We also need to test
 			 * flit is not transitting through subescape network.
 			 */
-			if ((g_global_misrouting == MM || g_global_misrouting == MM_L)
-					&& (input_port >= g_local_router_links_offset) && (input_port < g_global_router_links_offset)
-					&& (outP >= g_local_router_links_offset) && (outP < g_global_router_links_offset)
-					&& (this->hPos == flitEx->sourceGroup) && (this->hPos != flitEx->destGroup)
-					&& not (flitEx->globalMisroutingDone) && not (output_emb_escape) && not (input_emb_escape)) {
-				flitEx->mandatoryGlobalMisrouting_flag = 1;
+			switch (g_global_misrouting) {
+				case MM:
+				case MM_L:
+					if ((input_port >= g_local_router_links_offset) && (input_port < g_global_router_links_offset)
+							&& (outP >= g_local_router_links_offset) && (outP < g_global_router_links_offset)
+							&& (this->hPos == flitEx->sourceGroup) && (this->hPos != flitEx->destGroup)
+							&& not (flitEx->globalMisroutingDone) && not (output_emb_escape) && not (input_emb_escape)
+							&& not (flitEx->getCurrentMisrouteType() == VALIANT)) {
+						flitEx->mandatoryGlobalMisrouting_flag = 1;
 #if DEBUG
-				if (outP == routing->minOutputPort(flitEx->destId))
-				cerr << "ERROR in sw " << this->label << " with flit " << flitEx->flitId << " from src "
-				<< flitEx->sourceId << " to dest " << flitEx->destId << " traversing from inPort "
-				<< input_port << " to outPort " << outP << ")" << endl;
+						if (outP == routing->minOutputPort(flit->destId))
+						cerr << "ERROR in sw " << this->label << " with flit " << flitEx->flitId
+						<< " from src " << flitEx->sourceId << " to dest " << flitEx->destId
+						<< " traversing from inPort " << input_port << " to outPort " << outP << endl;
 #endif
-				assert(outP != routing->minOutputPort(flitEx->destId));
+						assert(outP != routing->minOutputPort(flitEx->destId));
+					}
+					break;
+				case NRG:
+				case NRG_L:
+				case RRG:
+				case RRG_L:
+					if ((outP != routing->minOutputPort(flitEx->destId)) && (input_port < g_global_router_links_offset)
+							&& (outP >= g_local_router_links_offset) && (outP < g_global_router_links_offset)
+							&& (this->hPos == flitEx->sourceGroup) && (this->hPos != flitEx->destGroup)
+							&& not (flitEx->globalMisroutingDone) && not (output_emb_escape) && not (input_emb_escape)
+							&& not (flitEx->getCurrentMisrouteType() == VALIANT)) {
+						flitEx->mandatoryGlobalMisrouting_flag = 1;
+					}
 			}
 		}
+
+		outPorts[outP]->insert(nextC, flitEx, g_flit_size);
 
 		if (input_port < g_p_computing_nodes_per_router) {
 			flitEx->setChannel(nextC);
@@ -1302,5 +1274,42 @@ void switchModule::sendFlit(int input_port, int input_channel, int outP, int nex
 
 		trackTransitStatistics(flitEx, input_channel, outP, nextC);
 	}
+}
+
+void switchModule::printSwitchStatus() {
+	int p, vc, occ, f;
+	flitModule *fl;
+	cerr << "Switch " << this->label << " (cycle " << g_cycle << ")" << endl;
+	for (p = 0; p < g_p_computing_nodes_per_router; p++) {
+		for (vc = 0; vc < g_injection_channels; vc++) {
+			occ = inPorts[p]->getBufferOccupancy(0, vc);
+			if (occ != 0) {
+				cerr << "Port " << setfill(' ') << setw(2) << p << ", vc " << setfill(' ') << setw(2) << vc
+						<< " - occup " << setfill(' ') << setw(3) << occ << ": ";
+				for (f = occ / g_flit_size - 1; f >= 0; f--) {
+					inPorts[p]->checkFlit(0, vc, fl, f);
+					cerr << "Dst " << setfill(' ') << setw(5) << fl->destId << " (gr " << setfill(' ') << setw(3)
+							<< fl->destGroup << ") |";
+				}
+				cerr << endl;
+			}
+		}
+	}
+	for (p = g_p_computing_nodes_per_router; p < g_global_router_links_offset + g_h_global_ports_per_router; p++) {
+		for (vc = 0; vc < g_channels; vc++) {
+			occ = inPorts[p]->getBufferOccupancy(0, vc);
+			if (occ != 0) {
+				cerr << "Port " << setfill(' ') << setw(2) << p << ", vc " << setfill(' ') << setw(2) << vc
+						<< " - occup " << setfill(' ') << setw(3) << occ << ": ";
+				for (f = occ / g_flit_size - 1; f >= 0; f--) {
+					inPorts[p]->checkFlit(0, vc, fl, f);
+					cerr << "Dst " << setfill(' ') << setw(5) << fl->destId << " (gr " << setfill(' ') << setw(3)
+							<< fl->destGroup << ") |";
+				}
+				cerr << endl;
+			}
+		}
+	}
+	cerr << "-------------------------------------------------------------------------" << endl;
 }
 

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -81,8 +81,10 @@ bool pb::misrouteCondition(flitModule * flit, int inPort) {
 
 	if ((inPort < g_p_computing_nodes_per_router) && (minOutP >= g_p_computing_nodes_per_router)) {
 		/* Calculate credit occupancy for the minimal and Valiant paths output port */
-		minQueueLength = switchM->switchModule::getCreditsOccupancy(minOutP, this->nextChannel(inPort, minOutP, flit));
-		valQueueLength = switchM->switchModule::getCreditsOccupancy(valOutP, this->nextChannel(inPort, valOutP, flit));
+		minQueueLength = switchM->switchModule::getCreditsOccupancy(minOutP, flit->cos,
+				this->nextChannel(inPort, minOutP, flit));
+		valQueueLength = switchM->switchModule::getCreditsOccupancy(valOutP, flit->cos,
+				this->nextChannel(inPort, valOutP, flit));
 		/* UGAL-L(ocal) condition: if the product of minimal outport queue occupancy and the
 		 * minimal path length is greater than the corresponding of Valiant path (plus a
 		 * local threshold), then do Valiant misrouting. */

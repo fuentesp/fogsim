@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -48,12 +48,19 @@ public:
 	int *neighPort; /* PORT NUMBER associated to each PORT of the current switch */
 	int *tableSwOut, *tableGroupOut, *tableInRing1, *tableOutRing1, *tableInRing2, *tableOutRing2, *tableInTree,
 			*tableOutTree;
-	bool * globalLinkCongested; /* Employed under congested restriction to determine whether to misroute or not */
+	bool *** globalLinkCongested; /* Employed under congested restriction to determine wether to misroute or not */
 
+	vector<int> petitionVc;
+	vector<int> responseVc;
+	vector<char> typeVc;
 	vector<int> globalVc;
 	vector<int> localVcSource;
 	vector<int> localVcInter;
 	vector<int> localVcDest;
+	vector<int> globalResVc;
+	vector<int> localResVcSource;
+	vector<int> localResVcInter;
+	vector<int> localResVcDest;
 
 	baseRouting(switchModule *switchM);
 	~baseRouting();
@@ -65,9 +72,10 @@ public:
 	int nextChannel(int inP, int outP, flitModule * flit);
 	char portType(int port);
 	bool validMisroutePort(flitModule * flit, int outP, int nextC, double threshold, MisrouteType misroute);
-	virtual candidate enroute(flitModule * flit, int inPort, int inVC) = 0;
+	virtual struct candidate enroute(flitModule * flit, int inPort, int inVC) = 0;
 	int hopsToDest(flitModule * flit, int outP);
 	int hopsToDest(int destination);
+	void setValNode(flitModule * flit);
 
 private:
 	void setMinTables();

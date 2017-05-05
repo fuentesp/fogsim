@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -87,9 +87,9 @@ bool ugal::misrouteCondition(flitModule * flit, int inPort) {
 		 * reached, choose min path to Val node */
 		result = true;
 	} else if ((inPort < g_p_computing_nodes_per_router) && (minOutP >= g_p_computing_nodes_per_router)) {
-		/* Determine minimal and Valiant paths output port */
-		minQueueLength = switchM->getCreditsOccupancy(minOutP, this->nextChannel(inPort, minOutP, flit));
-		valQueueLength = switchM->getCreditsOccupancy(valOutP, this->nextChannel(inPort, valOutP, flit));
+		/* Determine credit occupancy for minimal and Valiant paths */
+		minQueueLength = switchM->getCreditsOccupancy(minOutP, flit->cos, this->nextChannel(inPort, minOutP, flit));
+		valQueueLength = switchM->getCreditsOccupancy(valOutP, flit->cos, this->nextChannel(inPort, valOutP, flit));
 
 		/* UGAL-L(ocal) condition: if the product of minimal outport queue occupancy and the
 		 * minimal path length is greater than the corresponding of Valiant path (plus a

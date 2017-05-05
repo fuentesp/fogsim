@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -50,22 +50,32 @@ protected:
 	int m_flitSeq;
 	int destLabel;
 	int destSwitch;
-	bool m_flit_created;
 	long long m_packet_id;
 	int m_packet_in_cycle;
-	void determinePaths(int source, int dest, int val);
-
+	vector<int> injPetVcs, injResVcs;
+	float injection_probability;
+	int pendingPetitions;
+	void inject();
 public:
 	switchModule *switchM;
 	int sourceLabel;
 	steadyTraffic *pattern;
+	long long lastConsumeCycle = LLONG_MIN;
+	unsigned long sum_injection_probability;
 	generatorModule(int interArrivalTime, string name, int sourceLabel, int pPos, int aPos, int hPos,
 			switchModule *switchM);
-	~generatorModule();
-	void action();
-	virtual void generateFlit();
+	virtual ~generatorModule();
+	virtual void action() override;
+	virtual flitModule* generateFlit(FlitType flitType = RESPONSE, int destId = -1);
+	void determinePaths(flitModule *flit);
 	void getNodeCoords(int nodeId, int &nodeP, int &nodeA, int &nodeH);
-
+	int getInjectionVC(int dest, FlitType flitType);
+	vector<int> getArrayInjVC(int dest, bool response);
+	void setInjectionProbability(float newInjectionProbability);
+	void decreasePendingPetitions(int numPetitions = 1);
+	virtual bool checkConsume(flitModule *flit);
+	virtual void consumeFlit(flitModule *flit, int input_port, int input_channel);
+	void trackConsumptionStatistics(flitModule *flit, int inP, int inC, int outP);
 	/* Support functions, only intended for trace generator compatibility */
 	virtual inline bool isGenerationEnded() {
 		assert(0);

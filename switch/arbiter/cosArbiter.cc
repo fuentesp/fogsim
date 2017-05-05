@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -18,57 +18,73 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#include "localArbiter.h"
+#include "cosArbiter.h"
 #include "../switchModule.h"
 #include "../../flit/flitModule.h"
 
 using namespace std;
 
-localArbiter::localArbiter(int inPortNumber, switchModule *switchM) :
-		arbiter(switchM) {
-	this->ports = g_channels;
-	this->label = inPortNumber;
-	this->LRSPortList = new int[g_channels];
-	for (int i = 0; i < g_channels; i++) {
-		this->LRSPortList[i] = i;
+cosArbiter::cosArbiter(int portNumber, unsigned short cos, switchModule *switchM, ArbiterType policy) {
+	this->switchM = switchM;
+	this->label = cos;
+	this->input_port = portNumber;
+	switch (policy) {
+		case LRS:
+			this->arbProtocol = new lrsArbiter(IN, input_port, label, g_channels, switchM);
+			break;
+		case PrioLRS:
+			cerr << "Warning: right now, there is no use in Priority LRS policy for cos arbiters" << endl;
+			this->arbProtocol = new priorityLrsArbiter(IN, input_port, label, g_channels, 0, switchM);
+			break;
+		case RR:
+			this->arbProtocol = new rrArbiter(IN, input_port, label, g_channels, switchM);
+			break;
+		case PrioRR:
+			cerr << "Warning: right now, there is no use in Priority RoundRobin policy for input arbiters" << endl;
+			this->arbProtocol = new priorityRrArbiter(IN, input_port, label, g_channels, 0, switchM);
+			break;
+		case AGE:
+			this->arbProtocol = new ageArbiter(IN, input_port, label, g_channels, switchM);
+			break;
+		case PrioAGE:
+			cerr << "Warning: right now, there is no use in Priority Age Arbiter policy for cos arbiters" << endl;
+			this->arbProtocol = new priorityAgeArbiter(IN, input_port, label, g_channels, 0, switchM);
+			break;
+		default:
+			cerr << "ERROR: undefined output arbiter policy." << endl;
+			exit(-1);
 	}
 }
 
-localArbiter::~localArbiter() {
-
+cosArbiter::~cosArbiter() {
+	delete arbProtocol;
 }
 
-/*
- * Increase petition statistics.
- */
-void localArbiter::updateStatistics(int port) {
-	g_petitions++;
-	if (this->label < g_p_computing_nodes_per_router) g_injection_petitions++;
-}
-
-bool localArbiter::attendPetition(int input_channel) {
-	int outP, outVC, nextP, input_port = this->label;
+bool cosArbiter::attendPetition(int input_channel) {
+	int outP, outVC, nextP;
+	unsigned short cos = this->label;
 	bool result;
 	flitModule *flit = NULL;
+	if (!portCanSendFlit(input_port, cos, input_channel) || switchM->reservedInPort[cos][input_channel]) return false;
 
-	if (!portCanSendFlit(input_port, input_channel) || switchM->reservedInPort[input_channel]) return false;
-
-	flit = switchM->getFlit(input_port, input_channel);
+	flit = switchM->getFlit(input_port, cos, input_channel);
 
 	/* Reset misrouting petition tracking variables */
 	if (flit->head == true) {
 		/* First flit of a packet */
-		candidate selectedPath = switchM->routing->enroute(flit, input_port, input_channel);
+		candidate selectedPath;
+		selectedPath = switchM->routing->enroute(flit, input_port, input_channel);
 		outP = selectedPath.port;
 		outVC = selectedPath.vc;
 		nextP = selectedPath.neighPort;
 	} else {
 		/* Body flit of a packet: forward it to the assigned output
 		 * port (remember routing is done in a per-packet basis) */
-		outP = switchM->getCurrentOutPort(input_port, input_channel);
-		outVC = switchM->getCurrentOutVC(input_port, input_channel);
+		outP = switchM->getCurrentOutPort(input_port, cos, input_channel);
+		outVC = switchM->getCurrentOutVC(input_port, cos, input_channel);
 		nextP = switchM->routing->neighPort[outP];
 	}
+	assert(outP >= 0 && outP < g_ports);
 
 	/* Determine if petition can be released or not */
 	if (petitionCondition(input_port, input_channel, outP, nextP, outVC, flit)) {
@@ -79,31 +95,31 @@ bool localArbiter::attendPetition(int input_channel) {
 		result = true;
 	} else {
 		/* Petition can NOT be made */
-		switchM->globalArbiters[outP]->petitions[input_port] = 0;
+		switchM->outputArbiters[outP]->petitions[input_port] = 0;
 		result = false;
 	}
-
 	return result;
 }
 
 /*
  * Determines if a localArbiter can make petition for a given flit and route.
  */
-bool localArbiter::petitionCondition(int input_port, int input_channel, int outP, int nextP, int nextC,
+bool cosArbiter::petitionCondition(int input_port, int input_channel, int outP, int nextP, int nextC,
 		flitModule *flitEx) {
-	bool can_send_flit, result;
+	assert(outP >= 0 && outP < g_ports);
+	unsigned short cos = this->label;
+	bool result;
 	/* Sanity check: petition can only be made if input port is ready to send flit */
-	can_send_flit = portCanSendFlit(input_port, input_channel);
-	assert(can_send_flit);
+	assert(portCanSendFlit(input_port, cos, input_channel));
 
 	/* Check if petition requires a consumption port (linked to a computing node) or a transit one */
 	if (outP < g_p_computing_nodes_per_router) {
 		/* Flit attempts consumption */
-		result = switchM->checkConsumePort(outP);
+		result = switchM->checkConsumePort(outP, flitEx);
 	} else {
 		/* Flit attempts transit */
 		bool can_receive_flit, output_emb_net, nextVC_unLocked;
-		int bubble = 0, crd = switchM->getCredits(outP, nextC);
+		int bubble = 0, crd = switchM->getCredits(outP, cos, nextC);
 
 		/* Check if neighbor port is ready to rx flit */
 		can_receive_flit = switchM->nextPortCanReceiveFlit(outP);
@@ -145,12 +161,13 @@ bool localArbiter::petitionCondition(int input_port, int input_channel, int outP
 		}
 #if DEBUG
 		if (not result) {
-			cout << "TRANSIT flit: cycle " << g_cycle << "--> SW " << label << " input Port " << input_port << " CV "
-			<< input_channel << " flit " << flitEx->flitId << " destSW " << flitEx->destSwitch
-			<< " min-output Port " << switchM->routing->minOutputPort(flitEx) << " : can NOT make petition";
+			cout << "TRANSIT flit: cycle " << g_cycle << "--> SW " << label << " inPort " << input_port
+			<< " VC " << input_channel << " flit " << flitEx->flitId << " dest " << flitEx->destId
+			<< " destSW " << flitEx->destSwitch << " outPort " << outP << " VC " << nextC
+			<< " MIN outPort " << switchM->routing->minOutputPort(flitEx->destId) << " : can NOT make petition";
 			if (not (crd >= ((1 + bubble) * g_flit_size))) cout << " (out of credits)";
 			if (not (can_receive_flit == 1)) cout << " (busy link)";
-			cout << "." << endl << endl;
+			cout << "." << endl;
 		}
 #endif
 	}
@@ -158,33 +175,30 @@ bool localArbiter::petitionCondition(int input_port, int input_channel, int outP
 }
 
 /*
- * Checks if port is ready to transmit. For a local arbiter,
- * this means that allocator speed-up is not exceeded.
- * SpeedUp in the allocator is the equivalent for number
- * of ports to the xbar for each router ingress.
- */
-bool localArbiter::checkPort() {
-	int i, xbarPortsInUse = 0, port = this->label;
-	for (i = 0; i < g_channels; i++) {
-		if (switchM->inPorts[port]->isBufferSending(i)) xbarPortsInUse++;
-	}
-	if (xbarPortsInUse < g_local_arbiter_speedup)
-		return true;
-	else
-		return false;
-}
-
-/*
  * Checks whether port can send or not. It considers if
  * port is currently tx (or has speed-up) and that there's
  * a flit to be tx.
  */
-bool localArbiter::portCanSendFlit(int port, int vc) {
-	bool can_send_flit = true;
-	if (not checkPort()) can_send_flit = false;
+bool cosArbiter::portCanSendFlit(int port, unsigned short cos, int vc) {
+	return (switchM->inPorts[port]->canSendFlit(cos, vc) && !switchM->inPorts[port]->emptyBuffer(cos, vc));
+}
 
-	can_send_flit = can_send_flit && switchM->inPorts[port]->canSendFlit(vc)
-			&& !switchM->inPorts[port]->emptyBuffer(vc);
-
-	return can_send_flit;
+/*
+ * Arbitration function: iterates through all arbiter inputs
+ * and returns attended port (if any, -1 otherwise).
+ */
+int cosArbiter::action() {
+	int input_port, port, attendedPort = -1;
+	bool port_served;
+	for (port = 0; port < arbProtocol->ports; port++) {
+		input_port = arbProtocol->getServingPort(port);
+		port_served = this->attendPetition(input_port);
+		if (port_served) {
+			attendedPort = input_port;
+			port = arbProtocol->ports;
+			/* Reorder port list */
+			arbProtocol->markServedPort(input_port);
+		}
+	}
+	return attendedPort;
 }

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,6 +23,18 @@
 rlm::rlm(switchModule *switchM) :
 		baseRouting(switchM) {
 	assert(g_deadlock_avoidance == DALLY); // Sanity check
+	/* Remove default VC and port type ordering to replace with specific for RLM */
+	baseRouting::typeVc.clear();
+	baseRouting::petitionVc.clear();
+	baseRouting::responseVc.clear();
+	char aux[] = { 'a', 'a', 'h', 'a', 'a', 'h', 'a', 'a' };
+	typeVc.insert(typeVc.begin(), aux, aux + 8);
+	int aux2[] = { 0, 0, 0, 1, 1, 1, 2, 2 };
+	petitionVc.insert(petitionVc.begin(), aux2, aux2 + 8);
+	if (g_reactive_traffic) {
+		int aux3[] = { 3, 3, 2, 4, 4, 3, 5, 5 };
+		responseVc.insert(responseVc.begin(), aux3, aux3 + 8);
+	}
 }
 
 rlm::~rlm() {
@@ -148,17 +160,19 @@ int rlm::nominateCandidates(flitModule * flit, int inPort, int minOutP, double t
 	int outP, nextC, i, port_offset, port_limit, num_candidates = 0;
 	bool valid_candidate;
 
+	nextC = flit->channel;
+	if (inPort < g_p_computing_nodes_per_router) nextC = 0;
+
 	switch (misroute) {
 		case LOCAL:
 			port_offset = g_local_router_links_offset;
 			port_limit = g_local_router_links_offset + g_a_routers_per_group - 1;
-			nextC = flit->channel + 1;
+			nextC += 1;
 			assert(nextC <= g_local_link_channels);
 			break;
 		case LOCAL_MM:
 			port_offset = g_local_router_links_offset;
 			port_limit = g_local_router_links_offset + g_a_routers_per_group - 1;
-			nextC = flit->channel;
 			assert(nextC <= g_local_link_channels);
 			break;
 		case GLOBAL_MANDATORY:
@@ -211,27 +225,4 @@ bool rlm::strictRoute(int s_router, int i_router, int d_router) {
 	if ((s_router < i_router) && (i_router < d_router))
 		result = parity(d_router, s_router) ? true : parity(i_router, s_router);
 	return result;
-}
-
-/*
- * Determines next channel, considering some routes
- * are restricted. Only used in RLM routing.
- */
-int rlm::nextChannel(int inP, int outP, flitModule * flit) {
-
-	char outType, inType;
-	int next_channel, inVC = flit->channel;
-
-	inType = portType(inP);
-	outType = portType(outP);
-
-	if ((inType == 'p'))
-		next_channel = 0;
-	else if (inType == 'h' && (outType == 'a' || outType == 'h')) {
-		next_channel = inVC + 1;
-	} else
-		next_channel = inVC;
-
-	assert(next_channel < g_channels);
-	return (next_channel);
 }

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,15 +23,17 @@
 
 #include "../global.h"
 #include "../gModule.h"
-#include "arbiter/localArbiter.h"
-#include "arbiter/globalArbiter.h"
-#include "arbiter/priorityGlobalArbiter.h"
+#include "arbiter/arbiter.h"
+#include "arbiter/inputArbiter.h"
+#include "arbiter/outputArbiter.h"
 #include "../flit/caFlit.h"
 #include "../pbState.h"
 #include "../caHandler.h"
 #include "port/port.h"
 #include "port/inPort.h"
+#include "port/dynBufInPort.h"
 #include "port/outPort.h"
+#include "port/dynBufOutPort.h"
 #include "../routing/routing.h"
 
 using namespace std;
@@ -41,31 +43,32 @@ protected:
 	inPort **inPorts;
 	outPort **outPorts;
 	int portCount, vcCount;
-	queue<creditFlit> ** incomingCredits;
+	queue<creditFlit> **incomingCredits;
 	queue<pbFlit> incomingPb;
 	pbState piggyBack; /* PiggyBacking: global links state handler */
 	queue<caFlit> incomingCa;
 
-	void sendCredits(int port, int channel, int flitId);
 	double calculateBaseLatency(const flitModule * flit);
-	virtual void sendFlit(int input_port, int input_channel, int outP, int nextP, int nextC);
+	virtual void sendFlit(int input_port, unsigned short cos, int input_channel, int outP, int nextP, int nextC);
 	void updateMisrouteCounters(int outP, flitModule * flitEx);
-	void trackConsumptionStatistics(flitModule *flitEx, int input_port, int input_channel, int outP);
 	void trackTransitStatistics(flitModule *flitEx, int input_channel, int outP, int nextC);
+	virtual void printSwitchStatus();
 
 	/* Befriended functions to grant access to buffers & other variables. */
 	friend void caHandler::update();
 	friend void caHandler::readIncomingCAFlits();
-	friend bool localArbiter::checkPort();
-	friend bool localArbiter::portCanSendFlit(int port, int vc);
+	friend bool inputArbiter::checkPort();
+	friend bool cosArbiter::portCanSendFlit(int port, unsigned short cos, int vc);
+	friend void ageArbiter::reorderPortList();
+	friend void priorityAgeArbiter::reorderPortList();
 
 public:
+	unsigned short cosLevels;
 	caHandler m_ca_handler;
 	baseRouting* routing;
-	localArbiter **localArbiters;
-	globalArbiter **globalArbiters;
-	int label, pPos, aPos, hPos;
-	float *lastConsumeCycle;
+	inputArbiter **inputArbiters;
+	outputArbiter **outputArbiters;
+	int label, aPos, hPos;
 	int messagesInQueuesCounter;
 	bool escapeNetworkCongested;
 	long long packetsInj;
@@ -73,19 +76,22 @@ public:
 	float *injectionQueueOccupancy;
 	float *localQueueOccupancy;
 	float *globalQueueOccupancy;
+	float outputQueueOccupancy;
 	float *localEscapeQueueOccupancy;
 	float *globalEscapeQueueOccupancy;
 	bool *reservedOutPort;
-	bool *reservedInPort;
+	bool **reservedInPort;
 
 	switchModule(string name, int label, int aPos, int hPos, int ports, int vcCount);
-	~switchModule();
+	virtual ~switchModule();
 	int getTotalCapacity();
 	int getTotalFreeSpace();
 	void insertFlit(int port, int vc, flitModule *flit);
-	virtual int getCredits(int port, int channel);
-	virtual int getCreditsOccupancy(int port, int channel);
-	virtual int checkConsumePort(int port);
+	virtual int getCredits(int port, unsigned short cos, int channel);
+	virtual int getCreditsOccupancy(int port, unsigned short cos, int channel, int buffer = 0);
+	int getCreditsMinOccupancy(int port, unsigned short cos, int channel);
+	int getPortCredits(int port, unsigned short cos, vector<int> vc_array);
+	virtual bool checkConsumePort(int port, flitModule *flit);
 	void increasePortCount(int port);
 	void increaseVCCount(int vc, int port);
 	void increasePortContentionCount(int port);
@@ -96,17 +102,18 @@ public:
 	void receiveCreditFlit(int port, const creditFlit& crdFlit);
 	void receivePbFlit(const pbFlit& crdFlit);
 	void receiveCaFlit(const caFlit& flit);
+	void sendCredits(int port, unsigned short cos, int channel, flitModule * flit);
 
 	inline int getSwPortSize() {
 		return portCount;
 	}
-	inline int getMaxCredits(int port, int vc) {
-		return outPorts[port]->maxCredits[vc];
+	inline int getMaxCredits(int port, unsigned short cos, int vc) {
+		return outPorts[port]->maxCredits[cos][vc];
 	}
 	virtual bool nextPortCanReceiveFlit(int port);
-	flitModule * getFlit(int port, int vc);
-	int getCurrentOutPort(int port, int vc);
-	int getCurrentOutVC(int port, int vc);
+	flitModule * getFlit(int port, unsigned short cos, int vc);
+	int getCurrentOutPort(int port, unsigned short cos, int vc);
+	int getCurrentOutVC(int port, unsigned short cos, int vc);
 	bool isVCUnlocked(flitModule * flit, int port, int vc);
 	bool isGlobalLinkCongested(const flitModule * flit);
 

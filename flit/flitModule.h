@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -51,6 +51,11 @@ public:
 	float inCyclePacket;
 	bool valNodeReached;
 	bool mandatoryGlobalMisrouting_flag;
+	FlitType flitType;
+	int petitionSrcId;
+	long double petitionLatency;
+	unsigned short cos; /* Class of service - Ethernet 802.1q */
+	int length;
 
 	/* Hop counters*/
 	int hopCount;
@@ -75,12 +80,14 @@ public:
 	int nextP, nextVC, prevP, prevVC;
 
 	/* TRACES */
-	int length;
 	int task;
 	int mpitype;
 
+	/* Graph500 */
+	int graph_queries;
+
 	flitModule(int packetId, int flitId, int flitSeq, int sourceId, int destId, int destSwitch, int valId, bool head,
-			bool tail);
+			bool tail, unsigned short cos = 0);
 	void addHop(int outP, int swId);
 	void addContention(int inP, int swId);
 	void subsContention(int outP, int swId);
@@ -91,6 +98,7 @@ public:
 	void setMisrouted(bool misrouted);
 	void setMisrouted(bool misrouted, MisrouteType misroute_type);
 	bool getMisrouted() const;
+	bool getPrevMisrouted() const;
 	void setBaseLatency(double base_latency);
 	double getBaseLatency() const;
 	void setCurrentMisrouteType(MisrouteType current_misroute_type);
@@ -101,6 +109,7 @@ public:
 
 private:
 	bool m_misrouted;
+	bool m_misrouted_prev;
 	double m_base_latency;
 	/* CurrentRouterGlobal and MixedMode global
 	 * misrouting counters */

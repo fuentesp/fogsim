@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -20,20 +20,27 @@
 
 #include "bufferedPort.h"
 
-bufferedPort::bufferedPort(int numVCs, int bufferNumber, int bufferCapacity, float delay, int reservedBufferCapacity) {
+bufferedPort::bufferedPort(unsigned short cosLevels, int numVCs, int bufferNumber, int bufferCapacity, float delay,
+		int reservedBufferCapacity) {
+	assert(cosLevels > 0 && cosLevels <= g_cos_levels);
+	this->cosLevels = cosLevels;
 	this->numVCs = g_local_link_channels + g_global_link_channels;
 	this->reservedBufferCapacity = reservedBufferCapacity;
 	this->aggregatedBufferCapacity = numVCs * (bufferCapacity / g_flit_size - this->reservedBufferCapacity);
 	assert(this->aggregatedBufferCapacity >= 0);
-	this->vcBuffers = new buffer*[this->numVCs];
-	for (int i = 0; i < this->numVCs; i++) {
-		this->vcBuffers[i] = new buffer(bufferNumber + i, bufferCapacity, delay);
+	this->vcBuffers = new buffer**[this->cosLevels];
+	for (int cos = 0; cos < this->cosLevels; cos++) {
+		this->vcBuffers[cos] = new buffer*[this->numVCs];
+		for (int vc = 0; vc < this->numVCs; vc++)
+			this->vcBuffers[cos][vc] = new buffer(bufferNumber + cos * this->numVCs + vc, bufferCapacity, delay);
 	}
 }
 
 bufferedPort::~bufferedPort() {
-	for (int i = 0; i < numVCs; i++) {
-		delete vcBuffers[i];
+	for (int cos = 0; cos < this->cosLevels; cos++) {
+		for (int vc = 0; vc < numVCs; vc++)
+			delete vcBuffers[cos][vc];
+		delete[] vcBuffers[cos];
 	}
 	delete[] vcBuffers;
 }
@@ -41,140 +48,170 @@ bufferedPort::~bufferedPort() {
 /* Returns number of free slots in the buffer (in PHITS). For flexible length buffers, this
  * number is the addition of free reserved space for the channel, plus total free shared space
  * in the buffer.  */
-int bufferedPort::getSpace(int vc) {
+int bufferedPort::getSpace(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return 0; /* Little hack to avoid errors when checking nonexistent buffers */
-	return vcBuffers[vc]->getSpace();
+	return vcBuffers[cos][vc]->getSpace();
 }
 
-void bufferedPort::checkFlit(int vc, flitModule* &nextFlit) {
+/*
+ * Returns head of buffer flit for a given cos and vc. When an offset is given, instead of returning head of buffer,
+ * it returns flit at head+offset position.
+ */
+void bufferedPort::checkFlit(unsigned short cos, int vc, flitModule* &nextFlit, int offset) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->checkFlit(nextFlit);
+	vcBuffers[cos][vc]->checkFlit(nextFlit, offset);
 }
 
-bool bufferedPort::unLocked(int vc) {
+bool bufferedPort::unLocked(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return true;
-	return vcBuffers[vc]->unLocked();
+	return vcBuffers[cos][vc]->unLocked();
 }
 
-int bufferedPort::getBufferOccupancy(int vc) {
+/*
+ * Return the buffer occupancy for a given cos and vc.
+ */
+int bufferedPort::getBufferOccupancy(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return 0;
-	return vcBuffers[vc]->getBufferOccupancy();
+	return vcBuffers[cos][vc]->getBufferOccupancy();
 }
 
-bool bufferedPort::emptyBuffer(int vc) {
+bool bufferedPort::emptyBuffer(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return true;
-	return vcBuffers[vc]->emptyBuffer();
+	return vcBuffers[cos][vc]->emptyBuffer();
 }
 
-bool bufferedPort::canSendFlit(int vc) {
+bool bufferedPort::canSendFlit(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return false;
-	return vcBuffers[vc]->canSendFlit();
+	return vcBuffers[cos][vc]->canSendFlit();
 }
 
-bool bufferedPort::canReceiveFlit(int vc) {
+bool bufferedPort::canReceiveFlit(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return false;
-	return vcBuffers[vc]->canReceiveFlit();
+	return vcBuffers[cos][vc]->canReceiveFlit();
 }
 
-bool bufferedPort::isBufferSending(int vc) {
+bool bufferedPort::isBufferSending(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return false; /* Little hack to avoid errors when checking unexisting buffers */
-	return vcBuffers[vc]->isBufferSending();
+	return vcBuffers[cos][vc]->isBufferSending();
 }
 
-void bufferedPort::reorderBuffer(int vc) {
+void bufferedPort::reorderBuffer(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->reorderBuffer();
+	vcBuffers[cos][vc]->reorderBuffer();
 }
 
-float bufferedPort::getDelay(int vc) const {
+float bufferedPort::getDelay(unsigned short cos, int vc) const {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return 0;
-	return vcBuffers[vc]->getDelay();
+	return vcBuffers[cos][vc]->getDelay();
 }
 
-float bufferedPort::getHeadEntryCycle(int vc) {
+float bufferedPort::getHeadEntryCycle(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return 0;
-	return vcBuffers[vc]->getHeadEntryCycle();
+	return vcBuffers[cos][vc]->getHeadEntryCycle();
 }
 
-void bufferedPort::setCurPkt(int vc, int id) {
+void bufferedPort::setCurPkt(unsigned short cos, int vc, int id) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->m_currentPkt = id;
+	vcBuffers[cos][vc]->m_currentPkt = id;
 }
 
-int bufferedPort::getCurPkt(int vc) {
+int bufferedPort::getCurPkt(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return -1;
-	return vcBuffers[vc]->m_currentPkt;
+	return vcBuffers[cos][vc]->m_currentPkt;
 }
 
-void bufferedPort::setOutCurPkt(int vc, int port) {
+void bufferedPort::setOutCurPkt(unsigned short cos, int vc, int port) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->m_outPort_currentPkt = port;
+	vcBuffers[cos][vc]->m_outPort_currentPkt = port;
 }
 
-int bufferedPort::getOutCurPkt(int vc) {
+int bufferedPort::getOutCurPkt(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return -1;
-	return vcBuffers[vc]->m_outPort_currentPkt;
+	return vcBuffers[cos][vc]->m_outPort_currentPkt;
 }
 
-void bufferedPort::setNextVcCurPkt(int vc, int nextVc) {
+void bufferedPort::setNextVcCurPkt(unsigned short cos, int vc, int nextVc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->m_nextVC_currentPkt = nextVc;
+	vcBuffers[cos][vc]->m_nextVC_currentPkt = nextVc;
 }
 
-int bufferedPort::getNextVcCurPkt(int vc) {
+int bufferedPort::getNextVcCurPkt(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return -1;
-	return vcBuffers[vc]->m_nextVC_currentPkt;
+	return vcBuffers[cos][vc]->m_nextVC_currentPkt;
 }
 
-int bufferedPort::getBufferCapacity(int vc) {
+int bufferedPort::getBufferCapacity(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return 0; /* Little hack to avoid errors when checking unexisting buffers */
-	return vcBuffers[vc]->bufferCapacity;
+	return vcBuffers[cos][vc]->bufferCapacity;
 }
 
-void bufferedPort::setPktLock(int vc, int id) {
+void bufferedPort::setPktLock(unsigned short cos, int vc, int id) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->m_pktLock = id;
+	vcBuffers[cos][vc]->m_pktLock = id;
 }
 
-int bufferedPort::getPktLock(int vc) {
+int bufferedPort::getPktLock(unsigned short cos, int vc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return -1;
-	return vcBuffers[vc]->m_pktLock;
+	return vcBuffers[cos][vc]->m_pktLock;
 }
 
-void bufferedPort::setPortPktLock(int vc, int port) {
+void bufferedPort::setPortPktLock(unsigned short cos, int vc, int port) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->m_portLock = port;
+	vcBuffers[cos][vc]->m_portLock = port;
 }
 
-void bufferedPort::setVcPktLock(int vc, int prevVc) {
+void bufferedPort::setVcPktLock(unsigned short cos, int vc, int prevVc) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->m_vcLock = prevVc;
+	vcBuffers[cos][vc]->m_vcLock = prevVc;
 }
 
-void bufferedPort::setUnlocked(int vc, int unlocked) {
+void bufferedPort::setUnlocked(unsigned short cos, int vc, int unlocked) {
 	assert(vc >= 0);
+	assert(cos >= 0 && cos < this->cosLevels);
 	if (vc >= this->numVCs) return;
-	vcBuffers[vc]->m_unLocked = unlocked;
+	vcBuffers[cos][vc]->m_unLocked = unlocked;
 }

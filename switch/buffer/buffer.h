@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -36,7 +36,7 @@ private:
 	float delay; /* Switch parameter */
 	int head; /* Head of line flit */
 	int tail; /* Last flit in queue */
-	float lastExtractCycle;
+	long double lastExtractCycle;
 	float txLength;
 
 public:
@@ -54,7 +54,7 @@ public:
 	buffer(int bufferNumber, int bufferCapacity, float delay);
 	~buffer();
 	bool extract(flitModule* &flitExtracted, float length);
-	void checkFlit(flitModule* &nextFlit);
+	void checkFlit(flitModule* &nextFlit, int offset);
 	void insert(flitModule *flit, float txLength);
 	int getSpace();
 	bool unLocked();

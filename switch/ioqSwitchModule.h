@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,26 +22,27 @@
 #define class_io_switch
 
 #include "switchModule.h"
-#include "port/bufferedOutPort.h"
+#include "port/dynBufBufferedOutPort.h"
 
 using namespace std;
 
 class ioqSwitchModule: public switchModule {
 private:
+	int *lastCheckedOutBuffer;
 	long double m_speedup_interval;
 	long double m_internal_cycle;
 	void updateOutputBuffer(int port);
-	void sendFlit(int input_port, int input_channel, int outP, int nextP, int nextC);
+	void sendFlit(int input_port, unsigned short cos, int input_channel, int outP, int nextP, int nextC);
 	void txFlit(int port, flitModule * flit);
 	bool nextPortCanReceiveFlit(int port);
-	int getCredits(int port, int channel);
-	int getCreditsOccupancy(int port, int channel);
-	int checkConsumePort(int port);
+	int getCredits(int port, unsigned short cos, int channel);
+	int getCreditsOccupancy(int port, unsigned short cos, int channel, int buffer = 0);
+	bool checkConsumePort(int port, flitModule* flit);
+	void printSwitchStatus();
 
 public:
 	ioqSwitchModule(string name, int label, int aPos, int hPos, int ports, int vcCount);
 	~ioqSwitchModule();
-
 	void action();
 };
 

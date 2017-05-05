@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -28,38 +28,31 @@ using namespace std;
 
 class bufferedOutPort: public outPort, public bufferedPort {
 protected:
-	int *outCredits;
+	int ***outCredits;
+	int ***outMinCredits;
+	int numConsumePetitions;
+	int totalMaxOutCredits;
 
 public:
-	int *maxOutCredits;
+	int ***maxOutCredits;
+	int numberSegregatedFlows;
 
-	bufferedOutPort(int numVCs, int portNumber, int bufferNumber, int bufferCapacity, float delay, switchModule * sw,
-			int reservedBufferCapacity = 0);
+	bufferedOutPort(unsigned short cosLevels, int numVCs, int portNumber, int bufferNumber, int bufferCapacity,
+			float delay, switchModule * sw, int reservedBufferCapacity = 0, int numberSegregatedFlows = 1);
 	~bufferedOutPort();
-	bool extract(int vc, flitModule* &flitExtracted, float length);
-	void insert(int vc, flitModule *flit, float txLength);
-	int getTotalOccupancy(int vc);
-	void setMaxOutOccupancy(int vc, int phits);
-	int getMaxOutOccupancy(int vc);
+	bool extract(unsigned short cos, int vc, flitModule* &flitExtracted, float length, int buffer = 0);
+	void insert(int vc, flitModule *flit, float txLength, int buffer = 0);
+	int getTotalOccupancy(unsigned short cos, int vc, int buffer = 0);
+	int getMinOccupancy(unsigned short cos, int vc);
+	void setMaxOutOccupancy(unsigned short cos, int vc, int phits);
+	int getNumPetitions();
+	int getSpace(int vc, int buffer = 0);
+	void checkFlit(unsigned short cos, int vc, flitModule* &nextFlit, int buffer = 0, int offset = 0);
+	int getBufferOccupancy(int vc, int buffer = 0);
+	bool canSendFlit(unsigned short cos, int vc, int buffer = 0);
+	bool canReceiveFlit(int vc);
+	void reorderBuffer(int vc);
 
-	inline int getSpace(int vc) {
-		return this->bufferedPort::getSpace(vc);
-	}
-	inline void checkFlit(int vc, flitModule* &nextFlit) {
-		this->bufferedPort::checkFlit(vc, nextFlit);
-	}
-	inline int getBufferOccupancy(int vc) {
-		return this->bufferedPort::getBufferOccupancy(vc);
-	}
-	inline bool canSendFlit(int vc) {
-		return this->bufferedPort::canSendFlit(vc);
-	}
-	inline bool canReceiveFlit(int vc) {
-		return this->bufferedPort::canReceiveFlit(vc);
-	}
-	inline void reorderBuffer(int vc) {
-		this->bufferedPort::reorderBuffer(vc);
-	}
 };
 
 #endif /* BUFFERED_PORT_H_ */

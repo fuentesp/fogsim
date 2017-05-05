@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -26,6 +26,9 @@
 #include <assert.h>
 #include <map>
 #include <vector>
+#include <limits.h>
+#include <random>
+#include <set>
 
 using namespace std;
 
@@ -41,6 +44,8 @@ extern long long g_max_cycles; /*						Maximum number of simulated cycles */
 extern long long g_warmup_cycles; /* 					Number of warm-up cycles; in those,
  *														 no general statistics are collected
  *														 (but some specific ones are) */
+extern int g_print_cycles; /*						Number of cycles between printing
+ *														 temporary stats to the stdout. */
 extern long long g_injection_queue_length; /* 			Injection queue size in phits */
 extern long long g_local_queue_length; /* 				Local link queue size in phits */
 extern long long g_global_queue_length; /* 				Global link queue size in phits */
@@ -62,14 +67,21 @@ extern int g_injection_channels; /*						Number of VCs in injection queues; refe
  *														 amount of generators per computing node */
 extern int g_local_link_channels; /* 					Number of VCs in local links */
 extern int g_global_link_channels; /* 					Number of VCs in global links */
+extern int g_local_res_channels; /*						Number of VCs in local links reserved for responses
+ *														 (exclusive for reactive traffic patterns)*/
+extern int g_global_res_channels; /*					Number of VCs in global links reserved for responses
+ *														 (exclusive for reactive traffic patterns)*/
+extern int g_segregated_flows; /*						Number of segregated traffic flows at output
+ *														 ports; currently only used to segregate petitions
+ *														 from responses at the consumption nodes. */
 extern int g_flit_size; /* 								Flit size in phits */
 extern int g_packet_size; /* 							Packet size in phits */
-extern int g_injection_probability; /* 					Packet injection probability at a generator.
+extern float g_injection_probability; /* 				Packet injection probability at a generator.
  *														 It ranges between 0 and 100 (it is expressed
  *														 as a percentage). When multiplied by packet
  *														 size and number of generators, gives total
  *														 injection rate within the network */
-extern char g_output_file_name[180]; /* 				Results filename */
+extern char *g_output_file_name; /* 					Results filename */
 extern long long g_seed; /* 							Employed seed (to randomize simulations) */
 extern int g_allocator_iterations; /* 					Number of (local/global) arbiter iterations
  *														 within an allocation cycle */
@@ -81,13 +93,13 @@ extern bool g_issue_parallel_reqs; /*					Used in conjunction with local_arbiter
 extern float g_internal_speedup; /*						SpeedUp in router frequency: router allocation
  *														 cycles are conducted faster and more frequently
  *														 than simulation cycles (only with InputOutputQueueing) */
-extern bool g_transit_priority; /*						Transit traffic priority over injection at the global
- *														 (output) arbiter: gives preference to transit (local
- *														 or global link) queues over injection. */
 extern bool g_palm_tree_configuration;
 extern bool g_transient_stats; /*						Determines if temporal statistics over simulation
  *														 time are tracked or not. Mainly related to transient
  *														 and trace traffic. */
+extern unsigned short g_cos_levels; /*					Number of Class of Service levels - Ethernet 802.1q */
+extern bool g_print_hists; /*							Chooses whether to print latency and injection
+ *														 histograms or not. */
 
 /***
  * General variables
@@ -117,6 +129,11 @@ extern ofstream g_output_file; /* 						Results file */
 extern generatorModule **g_generators_list; /* 			List of generator modules */
 extern switchModule **g_switches_list; /* 				List of router modules */
 extern int g_ports; /* 									Number of ports per router */
+extern default_random_engine g_reng; /*					Default random engine for any given distribution */
+
+enum PortType {
+	IN, OUT
+};
 
 /***
  * Switch types:
@@ -142,6 +159,71 @@ enum SwitchType {
 };
 
 extern SwitchType g_switch_type;
+
+/***
+ * Buffer types:
+ * -SEPARATED:                 default option, it employs one
+ *                                             buffer per port and VC.
+ * -SHARED:   shared memory space between those
+ *                                             VCs allocated in the same port. Each
+ *                                             VC has a reserved part of the memory
+ *                                             which can not be allocated to other
+ *                                             VCs, and there is a shared pool of
+ *                                             memory where packets from all VCs
+ *                                             can be hosted. Code implementation
+ *                                             considers separated buffer queues
+ *                                             but establishes additional
+ *                                             restrictions not to overcome total
+ *                                             buffer space.
+ */
+enum BufferType {
+	SEPARATED, DYNAMIC
+};
+
+/*
+ * Flit types:
+ * - PETITION:	petition packet for reactive traffic
+ * - RESPONSE:	default option
+ * - SIGNAL:	end-of-message-dispatching signal (for Graph500 synthetic traffic model)
+ * - ALLREDUCE: allreduce message (for Graph500 synthetic traffic model)
+ */
+enum FlitType {
+	PETITION, RESPONSE, SIGNAL, ALLREDUCE
+};
+
+extern BufferType g_buffer_type;
+extern int g_local_queue_reserved; /* Reserved queue space when using
+ *                                                                             shared buffers for local queues */
+extern int g_global_queue_reserved; /* Reserved queue space when using
+ *                                                                             shared buffers for global queues */
+
+/***
+ * Arbiter types:
+ * -RR:						Round-Robin.
+ * -PrioRR: 				Priority RR, gives priority to certain ports over
+ * 							others.
+ * -LRS:					Least Recently Served, default option, it serves
+ * 							 first the port which has been most time without
+ * 							 being attended.
+ * -PrioLRS:				Priority LRS, default option for output arbiters.
+ * 							 It gives priority to certain ports over others,
+ * 							 keeping them higher in the attendance order list
+ * 							 regardless of the time they were last served.
+ * 							 Useful to attend transit traffic before new injections,
+ * 							 reducing the effective injection rate under
+ * 							 congestion situations.
+ * -AGE:					AGE arbiter, gives priority to ports whose head-of-
+ * 							 -line packet has the oldest injection timestamp.
+ * -PrioAGE:				Priority Age Arbiter, has two sets of ports with
+ * 							 different priorities, upon the port priority given
+ * 							 by the user, and ports are ordered through their
+ * 							 timestamp among each set.
+ */
+enum ArbiterType {
+	RR, PrioRR, LRS, PrioLRS, AGE, PrioAGE
+};
+extern ArbiterType g_input_arbiter_type;
+extern ArbiterType g_output_arbiter_type;
 
 /***
  * Traffic type
@@ -178,12 +260,33 @@ extern SwitchType g_switch_type;
  * 			generators switch between bursts
  * 			towards the same node.
  * -TRACE: support for trace simulations.
+ * -RANDOM UNIFORM REACTIVE
+ * -ADVERSARIAL RANDOM NODE REACTIVE:
+ * 			identical to ADV_RANDOM_NODE, but
+ * 			triggering a response per every
+ * 			petition received at a node.
+ * -GRAPH500: Syntechic Traffic model of the Graph500 Communications
  */
 enum TrafficType {
-	UN, ADV, ADV_RANDOM_NODE, ADV_LOCAL, ADVc, ALL2ALL, MIX, TRANSIENT, SINGLE_BURST, BURSTY_UN, TRACE
+	UN,
+	ADV,
+	ADV_RANDOM_NODE,
+	ADV_LOCAL,
+	ADVc,
+	ALL2ALL,
+	MIX,
+	TRANSIENT,
+	SINGLE_BURST,
+	BURSTY_UN,
+	TRACE,
+	UN_RCTV,
+	ADV_RANDOM_NODE_RCTV,
+	BURSTY_UN_RCTV,
+	GRAPH500
 };
 
 extern TrafficType g_traffic;
+extern bool g_reactive_traffic; /*			Triggered by the traffic type, determines if petitions trigger a response */
 
 /* Adversarial traffic parameters */
 extern int g_adv_traffic_distance; /*		Distance to the adverse traffic destination group */
@@ -201,6 +304,25 @@ extern bool g_random_AllToAll;
 extern int g_single_burst_length; /* 		Burst length in flits */
 /* Bursty UN traffic parameters */
 extern int g_bursty_avg_length; /*			Average burst size in packets */
+/* Reactive traffic parameters */
+extern int g_max_petitions_on_flight; /*		Max number of petitions that can be issued without receiving their
+ *												response  (-1 for infinite)*/
+/* Graph 500 traffic variables */
+extern int g_graph_coalescing_size; /*		Number of queries by message */
+extern vector<int> g_graph_nodes_cap_mod; /*		Nodes with capabilities modified */
+extern int g_graph_cap_mod_factor; /*		Capability modification factor (0..200] */
+extern float g_graph_query_time; /*			Query consumption and generation time */
+extern int g_graph_scale; /*				Base 2 log of the number of vertices in the graph*/
+extern int g_graph_edgefactor; /*			Half of the average vertex degree */
+extern vector<int> g_graph_tree_level; /*	Number of levels */
+extern lognormal_distribution<float> g_graph_lognormal;
+extern vector<int> g_graph_root_node; /*	Root node */
+extern vector<int> g_graph_root_degree; /*	Number of edges connected to the root vertex */
+extern vector<long long> g_graph_queries_remain; /*	Queries to send, initialized to maximum for the whole network */
+extern vector<long long> g_graph_queries_rem_minus_means; /* Queries remaining minus means accumulated during levels */
+extern long long ***g_graph_p2pmess_node2node; /* Number of p2p messages from node to node by stage */
+extern int g_graph_max_levels; /*			Maximum number of levels */
+extern long long g_graph_p2pmess; /*		P2P messages sent during execution of Graph500 simulation */
 
 /***
  * Routing mechanism
@@ -282,6 +404,47 @@ extern int g_ugal_local_threshold;
 extern int g_ugal_global_threshold;
 extern int g_piggyback_coef;
 extern int g_th_min;
+extern bool g_reset_val; /*	Recalculate VAL node with SRC_ADP/OBL routing at injection if at the previous cycle
+ *									has not advanced through non-minimal route */
+
+/*
+ * VC usage:
+ * -Base: former VC usage (as in Marina's PhD. thesis), reusing
+ * 		VC labelling for local and global channels (i.e., a hop
+ * 		from a local link with VC 0 to a global link keeps VC 0).
+ * -Flexible: new VC usage, allowing every hop to choose within
+ * 		a range of possible VCs (rule to choose is low occupancy
+ * 		first), keeping a possible increasing VC path, whereas
+ * 		followed or not. Further detailed in flexible_routing.h
+ * 		This routing can have different allocation mechanisms.
+ */
+enum VcUsageType {
+	BASE, FLEXIBLE
+};
+extern VcUsageType g_vc_usage;
+
+enum VcAllocationMechanism {
+	HIGHEST_VC, LOWEST_VC, LOWEST_OCCUPANCY, RANDOM_VC
+};
+extern VcAllocationMechanism g_vc_alloc;
+
+/*
+ * Injection VC policy:
+ * -DEST: DESTination-based, divides the injection VCs by the
+ * 		number of destinations in the network, so that each
+ * 		injection VC has an even (or close to) share of the
+ * 		injections. Allocation is conducted via a modulo
+ * 		operation. This alleviates HOL-Blocking.
+ * -RAND: RANDom allocation, it selects any random VC whose
+ * 		corresponding buffer has space to store the flit.
+ * 		This potentially increases HOL-Blocking but slightly
+ * 		increases the injection rate.
+ */
+enum VcInjectionPolicy {
+	DEST, RAND
+};
+
+extern VcInjectionPolicy g_vc_injection;
 
 /*
  * VC_misroute restriction:
@@ -353,6 +516,23 @@ enum MisroutingTrigger {
 
 extern MisroutingTrigger g_misrouting_trigger;
 
+/*
+ * Congestion detection policy:
+ * -PER_PORT: checks total credit occupancy for the port.
+ * -PER_VC:	measures credit occupancy for the VC buffer.
+ * -PER_PORT_MIN: checks only the credit occupancy of the
+ * 		port corresponding to minimally routed packets
+ * 		(excluding those packets that have been misrouted
+ * 		at some point of their path).
+ * -PER_VC_MIN: identical to PER_PORT_MIN, but considering
+ * 		the VC buffer instead of the whole port.
+ */
+enum CongestionDetection {
+	PER_PORT, PER_VC, PER_PORT_MIN, PER_VC_MIN
+};
+
+extern CongestionDetection g_congestion_detection;
+
 //Variable thresholds. It is (roughly) equivalent
 // to use congestion aware. If set to 1, sets a variable
 // non minimal threshold as a percentage of queue occupancy
@@ -369,6 +549,9 @@ extern int g_percent_local_threshold;
 extern int g_percent_global_threshold;
 extern bool g_contention_aware; /*			Contention Aware (CA) Trigger */
 extern int g_contention_aware_th;
+extern int g_contention_aware_local_th; /*	Optionally employed in base CA implementation, to
+ *											alleviate contention detection problems under
+ *											certain traffic patterns. */
 extern int g_contention_aware_global_th; /* This is used to determine whether to misroute or not
  *											 in the case of CA_REMOTE misrouting trigger */
 extern bool g_increaseContentionAtHeader;	//TODO: is it useful to increase contention at header???
@@ -444,6 +627,7 @@ extern long double g_base_latency;
 extern long double g_warmup_flit_latency;
 extern long double g_warmup_packet_latency;
 extern long double g_warmup_injection_latency;
+extern long double g_response_latency;
 extern float *g_transient_record_latency;
 extern float *g_transient_record_injection_latency;
 extern long double *g_group0_totalLatency;	//Group 0, per switch average latency
@@ -460,13 +644,23 @@ extern long long g_rx_flit_counter;
 extern long long g_attended_flit_counter;
 extern long long g_tx_warmup_flit_counter;
 extern long long g_rx_warmup_flit_counter;
+extern long long g_response_counter;
+extern long long g_response_warmup_counter;
+extern long long g_nonminimal_counter;
+extern long long g_nonminimal_warmup_counter;
+extern long long g_nonminimal_inj;
+extern long long g_nonminimal_warmup_inj;
+extern long long g_nonminimal_src;
+extern long long g_nonminimal_warmup_src;
+extern long long g_nonminimal_int;
+extern long long g_nonminimal_warmup_int;
 extern long long g_min_flit_counter[];
 extern long long g_global_misrouted_flit_counter[];
 extern long long g_global_mandatory_misrouted_flit_counter[];
 extern long long g_local_misrouted_flit_counter[];
 extern int *g_transient_record_flits;
 extern int *g_transient_record_misrouted_flits;
-extern long long *g_group0_numFlits;
+extern long long ***g_group0_numFlits;
 extern long long *g_groupRoot_numFlits;
 extern float *g_transient_net_injection_latency;
 extern float *g_transient_net_injection_inj_latency;
@@ -536,11 +730,14 @@ extern long long g_max_root_subnetwork_injections;
 extern long long g_max_source_subnetwork_injections;
 extern long long g_max_dest_subnetwork_injections;
 
+extern set<int> g_verbose_switches;
+extern int g_verbose_cycles;
+
 /*
  * Traces support
  */
 enum TraceAssignation {
-	CONSECUTIVE, INTERLEAVED
+	CONSECUTIVE, INTERLEAVED, RANDOM
 };
 extern int g_num_traces;
 extern vector<string> g_trace_file; /*			Trace filename */

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -63,7 +63,7 @@ int all2allTraffic::setDestination(TrafficType type) {
 	int destLabel, destSwitch, destNode;
 	destLabel = prev_dest;
 
-	/* If burst is over, return a destination flag (-1) */
+	/* If burst is over, return a flag destination (-1) */
 	assert(flits_tx_count <= (g_number_generators - 1) * g_phases);
 	if (flits_tx_count == (g_number_generators - 1) * g_phases) return -1;
 

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -21,9 +21,10 @@
 #include "inPort.h"
 #include "../switchModule.h"
 
-inPort::inPort(int numVCs, int portNumber, int bufferNumber, int bufferCapacity, float delay, switchModule * sw,
-		int reservedBufferCapacity) :
-		port(numVCs, portNumber, sw), bufferedPort(numVCs, bufferNumber, bufferCapacity, delay, reservedBufferCapacity) {
+inPort::inPort(unsigned short cosLevels, int numVCs, int portNumber, int bufferNumber, int bufferCapacity, float delay,
+		switchModule * sw, int reservedBufferCapacity) :
+		port(cosLevels, numVCs, portNumber, sw), bufferedPort(cosLevels, numVCs, bufferNumber, bufferCapacity, delay,
+				reservedBufferCapacity) {
 }
 
 inPort::~inPort() {
@@ -34,10 +35,14 @@ inPort::~inPort() {
  * a buffer, we need to update occupancy status for local and shared
  * buffers statistics.
  */
-bool inPort::extract(int vc, flitModule* &flitExtracted, float length) {
-	assert(vc >= 0 && vc < this->port::numVCs);
+bool inPort::extract(unsigned short cos, int vc, flitModule* &flitExtracted, float length) {
+	assert(cos >= 0 && cos < this->port::cosLevels);
+	if (g_vc_usage == FLEXIBLE)
+		assert(vc >= 0 && vc < g_local_link_channels + g_global_link_channels);
+	else
+		assert(vc >= 0 && vc < this->port::numVCs);
 	m_sw->messagesInQueuesCounter -= 1; /*First we update sw track stats */
-	return vcBuffers[vc]->extract(flitExtracted, length);
+	return vcBuffers[cos][vc]->extract(flitExtracted, length);
 }
 
 /*
@@ -46,7 +51,11 @@ bool inPort::extract(int vc, flitModule* &flitExtracted, float length) {
  * statistics.
  */
 void inPort::insert(int vc, flitModule* flit, float txLength) {
-	assert(vc >= 0 && vc < this->port::numVCs);
+	assert(flit->cos >= 0 && flit->cos < this->port::cosLevels);
+	if (g_vc_usage == FLEXIBLE)
+		assert(vc >= 0 && vc < g_local_link_channels + g_global_link_channels);
+	else
+		assert(vc >= 0 && vc < this->port::numVCs);
 	m_sw->messagesInQueuesCounter += 1; /*First we update sw track stats */
-	vcBuffers[vc]->insert(flit, txLength);
+	vcBuffers[flit->cos][vc]->insert(flit, txLength);
 }

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -19,56 +19,32 @@
  */
 
 #include "arbiter.h"
+#include "../switchModule.h"
 
-arbiter::arbiter(switchModule *switchM) {
+using namespace std;
+
+arbiter::arbiter(PortType type, int portNumber, unsigned short cos, int numPorts, switchModule *switchM) {
+	this->type = type;
+	this->label = portNumber;
+	this->cos = cos;
+	this->ports = numPorts;
 	this->switchM = switchM;
+
+	/* Default port order is to go in order */
+	this->portList = new int[ports];
+	for (int i = 0; i < ports; i++)
+		this->portList[i] = i;
 }
 
 arbiter::~arbiter() {
-	delete[] LRSPortList;
+	delete[] portList;
 }
 
-int arbiter::getLRSPort(int offset) {
+int arbiter::getServingPort(int offset) {
 	assert(offset < ports);
-	return LRSPortList[offset];
+	return portList[offset];
 }
 
-void arbiter::reorderLRSPortList(int servedPort) {
+void arbiter::markServedPort(int servedPort) {
 	assert(servedPort >= 0 && servedPort < ports);
-	for (int i = 0; i < ports; i++) {
-		if (LRSPortList[i] == servedPort) {
-			for (int j = i; j < (ports - 1); j++) {
-				LRSPortList[j] = LRSPortList[j + 1];
-			}
-			LRSPortList[ports - 1] = servedPort;
-		}
-	}
-}
-
-/*
- * Arbitration function: iterates through all arbiter inputs
- * and returns attended port (if any, -1 otherwise).
- */
-int arbiter::action() {
-	int input_port, port, attendedPort = -1;
-	bool port_served;
-
-	/* If resource can not be granted, return -1 */
-	if (!this->checkPort()) return -1;
-
-	for (port = 0; port < this->ports; port++) {
-		/* Check port within LRS order */
-		input_port = this->getLRSPort(port);
-
-		port_served = this->attendPetition(input_port);
-		if (port_served) {
-			attendedPort = input_port;
-			port = this->ports;
-			/* Reorder port list */
-			this->reorderLRSPortList(input_port);
-
-			this->updateStatistics(input_port);
-		}
-	}
-	return attendedPort;
 }

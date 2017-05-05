@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -31,7 +31,7 @@ transientTraffic::~transientTraffic() {
 
 int transientTraffic::setDestination(TrafficType type) {
 	/* Determine the traffic pattern employed upon the number of simulated cycles */
-	if ((g_cycle < g_max_cycles + g_transient_traffic_cycle)) {
+	if ((g_cycle < g_warmup_cycles + g_transient_traffic_cycle)) {
 		g_adv_traffic_distance = g_phase_traffic_adv_dist[0];
 		return this->steadyTraffic::setDestination(g_phase_traffic_type[0]);
 	} else {

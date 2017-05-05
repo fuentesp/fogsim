@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -64,7 +64,7 @@ caHandler::~caHandler() {
  */
 void caHandler::update() {
 
-	int port, chan, group;
+	int port, cos, chan, group;
 	flitModule * flit = NULL;
 	caFlit* ca_flit;
 
@@ -79,49 +79,48 @@ void caHandler::update() {
 	}
 
 	//check buffer heads
-	for (port = 0; port < g_ports; port++) {
-		for (chan = 0; chan < g_channels; chan++) {
+	for (port = 0; port < g_ports; port++)
+		for (cos = 0; cos < g_cos_levels; cos++)
+			for (chan = 0; chan < g_channels; chan++) {
 
-			/* If buffer is not 'sending' and has
-			 * a flit to be sent, count it */
-			if (m_sw->inPorts[port]->canSendFlit(chan)) {
+				/* If buffer is not 'sending' and has
+				 * a flit to be sent, count it */
+				if (m_sw->inPorts[port]->canSendFlit(cos, chan)) {
 
-				// look-up flit in the buffer head
-				m_sw->inPorts[port]->checkFlit(chan, flit);
+					// look-up flit in the buffer head
+					m_sw->inPorts[port]->checkFlit(cos, chan, flit);
 
-				// increment minimal path output port counter
-				if (flit != NULL) {
-					if (g_misrouting_trigger == DUAL) {
-						// TODO: HACK! PENDING TO BE DONE DUE TO SOME PROBLEMS WITHIN MISROUTETYPE FUNCTION
-						/* CHECK THIS CAREFULLY, AS 'misrouteType' HAS BEEN MOVED
-						 * TO A VIRTUAL baseRouting FUNCTION. IT MAY HAPPEN RESULT
-						 * IS NOT 'NONE' EVEN IF CONGESTED RESTRICTION FORBIDS IT!!
-						 */
-//						MisrouteType mis = m_sw->routing->misrouteType(port, flit, m_sw->routing->min_outport(flit), chan);
-//						if (mis == NONE || mis == GLOBAL_MANDATORY)
-//							m_contention_counter[m_sw->routing->min_outport(flit)] += g_flit_size;
-//						else if (mis != GLOBAL_MANDATORY) {
-//							m_potential_contention_counter[m_sw->routing->min_outport(flit)] += g_flit_size;
-//						}
-					} else
-						m_contention_counter[m_sw->routing->minOutputPort(flit->destId)] += g_flit_size;
-					if (port < g_p_computing_nodes_per_router || port >= g_global_router_links_offset) {
-						/* If input port corresponds to an injection port or a global link, also account it for partial counter */
-						if (flit->destGroup != m_sw->hPos) {
-							m_partial_counter[m_sw->aPos][flit->destGroup] += g_flit_size;
-							assert(
-									m_partial_counter[m_sw->aPos][flit->destGroup]
-											< (g_flit_size
-													* (g_p_computing_nodes_per_router * g_injection_channels
-															+ g_h_global_ports_per_router * g_global_link_channels)));
+					// increment minimal path output port counter
+					if (flit != NULL) {
+						if (g_misrouting_trigger == DUAL) {
+							// TODO: HACK! PENDING TO BE DONE DUE TO SOME PROBLEMS WITHIN MISROUTETYPE FUNCTION
+							/* CHECK THIS CAREFULLY, AS 'misrouteType' HAS BEEN MOVED
+							 * TO A VIRTUAL baseRouting FUNCTION. IT MAY HAPPEN RESULT
+							 * IS NOT 'NONE' EVEN IF CONGESTED RESTRICTION FORBIDS IT!!
+							 */
+							//						MisrouteType mis = m_sw->routing->misrouteType(port, flit, m_sw->routing->min_outport(flit), chan);
+							//						if (mis == NONE || mis == GLOBAL_MANDATORY)
+							//							m_contention_counter[m_sw->routing->min_outport(flit)] += g_flit_size;
+							//						else if (mis != GLOBAL_MANDATORY) {
+							//							m_potential_contention_counter[m_sw->routing->min_outport(flit)] += g_flit_size;
+							//						}
+						} else
+							m_contention_counter[m_sw->routing->minOutputPort(flit->destId)] += g_flit_size;
+						if (port < g_p_computing_nodes_per_router || port >= g_global_router_links_offset) {
+							/* If input port corresponds to an injection port or a global link, also account it for partial counter */
+							if (flit->destGroup != m_sw->hPos) {
+								m_partial_counter[m_sw->aPos][flit->destGroup] += g_flit_size;
+								assert(
+										m_partial_counter[m_sw->aPos][flit->destGroup]
+												< (g_flit_size
+														* (g_p_computing_nodes_per_router * g_injection_channels
+																+ g_h_global_ports_per_router * g_global_link_channels)));
+							}
 						}
 					}
 				}
+
 			}
-
-		}
-	}
-
 	/* Take packets that are currently being sent into
 	 * account. If they're being sent through a global
 	 * link, account them for partial counter. */
@@ -278,6 +277,8 @@ bool caHandler::isThereGlobalContention(flitModule * flit) {
 bool caHandler::isThereContention(int output) {
 	bool contention = false;
 	contention = getContention(output) >= g_contention_aware_th * g_flit_size;
+	if (g_contention_aware_local_th >= 0 && output < g_global_router_links_offset)
+		contention = getContention(output) >= g_contention_aware_local_th * g_flit_size;
 	return contention;
 }
 

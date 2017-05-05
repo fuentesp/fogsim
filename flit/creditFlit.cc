@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -20,11 +20,16 @@
 
 #include "creditFlit.h"
 
-creditFlit::creditFlit(float arrivalCycle, int numCreds, int vc, int flitId) :
-		m_arrivalCycle(arrivalCycle), m_numCreds(numCreds), m_vc(vc), m_flitId(flitId) {
+creditFlit::creditFlit(float arrivalCycle, int numCreds, int numMinCreds, unsigned short cos, int vc, int flitId) :
+		m_arrivalCycle(arrivalCycle), m_numCreds(numCreds), m_numMinCreds(numMinCreds), m_cos(cos), m_vc(vc), m_flitId(
+				flitId) {
 }
 
 creditFlit::~creditFlit() {
+}
+
+unsigned short creditFlit::getCos() const {
+	return m_cos;
 }
 
 int creditFlit::getVc() const {
@@ -33,6 +38,10 @@ int creditFlit::getVc() const {
 
 int creditFlit::getNumCreds() const {
 	return m_numCreds;
+}
+
+int creditFlit::getNumMinCreds() const {
+	return m_numMinCreds;
 }
 
 float creditFlit::getArrivalCycle() const {

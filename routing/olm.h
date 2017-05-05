@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,6 +22,7 @@
 #define class_olm
 
 #include "routing.h"
+#include "flexibleRouting.h"
 
 template<class base>
 class olm: public base {
@@ -30,14 +31,92 @@ protected:
 public:
 	olm(switchModule *switchM) :
 			base(switchM) {
+		const int minLocalVCs = 3, minGlobalVCs = 2;
 		assert(g_deadlock_avoidance == DALLY); // Sanity check
-		assert(g_local_link_channels >= 3 && g_global_link_channels >= 2);
-		int vc;
-	}
+		assert(g_local_link_channels >= minLocalVCs && g_global_link_channels >= minGlobalVCs);
+		if (g_vc_usage == FLEXIBLE) {
+			int petLocalVCs = g_local_link_channels - g_local_res_channels;
+			int petGlobalVCs = g_global_link_channels - g_global_res_channels;
+			int vc;
+			/* Fill in VC arrays */
+			if (g_global_link_channels > minGlobalVCs) {
+				for (vc = petLocalVCs - minLocalVCs;
+						vc <= (petLocalVCs - minLocalVCs) + (petGlobalVCs - minGlobalVCs) - 1; vc++) {
+					baseRouting::globalVc.push_back(vc);
+				}
+			}
+			baseRouting::globalVc.push_back(petLocalVCs + petGlobalVCs - 4);
+			baseRouting::globalVc.push_back(petLocalVCs + petGlobalVCs - 2);
+			if (petLocalVCs > minLocalVCs) {
+				for (vc = 0; vc <= petLocalVCs - minLocalVCs - 1; vc++) {
+					baseRouting::localVcSource.push_back(vc);
+					baseRouting::localVcInter.push_back(vc);
+					baseRouting::localVcDest.push_back(vc);
+				}
+			}
+			/* We include one additional VC value in local source array to fix 2 cases:
+			 * A) Inter group is src group, to distinguish between minimal and misroute hop;
+			 * B) Inter group is dest group, so local hop in source group is minimal. */
+			baseRouting::localVcSource.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::localVcSource.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::localVcInter.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::localVcInter.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 1);
 
+			assert(baseRouting::globalVc.size() == petGlobalVCs);
+			assert(baseRouting::localVcSource.size() == petLocalVCs - 1);
+			assert(baseRouting::localVcInter.size() == petLocalVCs - 1);
+			assert(baseRouting::localVcDest.size() == petLocalVCs);
+			if (g_reactive_traffic) {
+				/* Under Flexible VC usage, response messages can use both its
+				 * reserved VCs plus those of the petitions. Although for the
+				 * petition path we need 3/2 VCs, for responses we assume a
+				 * minimum of 2/1 additional VCs (to ensure upwards VC path) */
+				const int minLocalResVCs = 2, minGlobalResVCs = 1;
+				assert(g_local_res_channels >= minLocalResVCs && g_global_res_channels >= minGlobalResVCs);
+				baseRouting::globalResVc = baseRouting::globalVc;
+				if (g_global_res_channels > minGlobalResVCs) {
+					for (vc = g_local_link_channels - minLocalResVCs + petGlobalVCs;
+							vc <= g_local_link_channels - minLocalResVCs + g_global_link_channels - minGlobalResVCs - 1;
+							vc++) {
+						baseRouting::globalResVc.push_back(vc);
+					}
+				}
+				baseRouting::globalResVc.push_back(g_local_link_channels + g_global_link_channels - 2);
+				baseRouting::localResVcSource = baseRouting::localVcDest;
+				baseRouting::localResVcInter = baseRouting::localVcDest;
+				baseRouting::localResVcDest = baseRouting::localVcDest;
+				if (g_local_res_channels > minLocalResVCs) {
+					for (vc = petLocalVCs + petGlobalVCs;
+							vc <= g_local_link_channels - minLocalResVCs + petGlobalVCs - 1; vc++) {
+						baseRouting::localResVcSource.push_back(vc);
+						baseRouting::localResVcInter.push_back(vc);
+						baseRouting::localResVcDest.push_back(vc);
+					}
+				}
+				/* Source array could be added an extra VC, but it would further complicate
+				 * VC calculation for local misrouting at source group (need to discard not
+				 * only the highest VC but also the second highest, in order to ensure an
+				 * upwards VC path -considering the global misrouting get its VC reused
+				 * from the petition path-). If # of VCs is minimum allowed, it would mean
+				 * to change from VC 5 to VC 2 because global hop would use VC 3. */
+				//baseRouting::localResVcSource.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcInter.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcDest.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcDest.push_back(g_local_link_channels + g_global_link_channels - 1);
+
+				assert(baseRouting::globalResVc.size() == g_global_link_channels);
+				assert(baseRouting::localResVcSource.size() == g_local_link_channels - 2);
+				assert(baseRouting::localResVcInter.size() == g_local_link_channels - 1);
+				assert(baseRouting::localResVcDest.size() == g_local_link_channels);
+			}
+		}
+
+	}
 	~olm() {
 	}
-
 	candidate enroute(flitModule * flit, int inPort, int inVC) {
 		candidate selectedRoute;
 		int destination, minOutP, minOutVC;
@@ -47,7 +126,10 @@ public:
 		/* Determine minimal output port (& VC) */
 		destination = flit->destId;
 		minOutP = baseRouting::minOutputPort(destination);
-		minOutVC = this->nextChannel(inPort, minOutP, flit);
+		if (g_vc_usage == FLEXIBLE)
+			minOutVC = base::nextChannel(inPort, minOutP, flit);
+		else
+			minOutVC = this->nextChannel(inPort, minOutP, flit);
 
 		/* Calculate misroute output port (if any should be taken) */
 		if (this->misrouteCondition(flit, minOutP, minOutVC)) {
@@ -118,8 +200,7 @@ private:
 						assert(flit->localMisroutingDone);
 						assert((inport >= g_local_router_links_offset) && (inport < g_global_router_links_offset));
 						result = GLOBAL_MANDATORY;
-					}
-					/* Injection: select global misrouting */
+					}/* Injection: select global misrouting */
 					else if (inport < g_p_computing_nodes_per_router)
 						result = GLOBAL;
 					/* If packet is transitting locally (inport port is a local port) */
@@ -129,8 +210,7 @@ private:
 				default:
 					break;
 			}
-		}
-		/* Source group is not liable to global misroute, try local */
+		}/* Source group is not liable to global misroute, try local */
 		else if ((g_global_misrouting == CRG_L || g_global_misrouting == RRG_L || g_global_misrouting == MM_L
 				|| g_global_misrouting == NRG_L) && not (flit->localMisroutingDone)
 				&& not (baseRouting::minOutputPort(flit->destId) >= g_global_router_links_offset)) {
@@ -140,7 +220,7 @@ private:
 #if DEBUG
 		cout << "cycle " << g_cycle << "--> SW " << this->switchM->label << " input Port " << inport << " CV " << flit->channel
 		<< " flit " << flit->flitId << " destSW " << flit->destSwitch << " min-output Port "
-		<< baseRouting::minOutputPort(flit) << " POSSIBLE misroute: ";
+		<< baseRouting::minOutputPort(flit->destId) << " POSSIBLE misroute: ";
 		switch (result) {
 			case LOCAL:
 			cout << "LOCAL" << endl;
@@ -165,7 +245,6 @@ private:
 
 		return result;
 	}
-
 	int nominateCandidates(flitModule * flit, int inPort, int minOutP, double threshold, MisrouteType &misroute,
 			int* &candidates_port, int* &candidates_VC) {
 		// Sanity checks for those parameters passed by address
@@ -205,7 +284,10 @@ private:
 		for (outP = port_offset; outP < port_limit; outP++) {
 			if (outP == minOutP) continue;
 
-			nextC = this->nextChannel(inPort, outP, flit);
+			if (g_vc_usage == FLEXIBLE)
+				nextC = base::nextChannel(inPort, outP, flit);
+			else
+				nextC = this->nextChannel(inPort, outP, flit);
 			assert(nextC <= g_channels);
 			valid_candidate = this->validMisroutePort(flit, outP, nextC, threshold, misroute);
 
@@ -217,6 +299,63 @@ private:
 			}
 		}
 		return num_candidates;
+	}
+	/*
+	 * Determines next channel, following Dally's usage of Virtual Channels
+	 * but addressing the specific case of misrouting ports (which will
+	 * employ previous traversal VC).
+	 */
+	int nextChannel(int inP, int outP, flitModule * flit) {
+		char outType, inType;
+		int next_channel = -1, i, index, inVC = flit->channel;
+
+		inType = baseRouting::portType(inP);
+		outType = baseRouting::portType(outP);
+
+		vector<int> auxVc;
+		/* Reactive traffic splits evenly the channels between petition and response
+		 * flits, so each kind of traffic receives the same number of resources. */
+		if (g_reactive_traffic && flit->flitType == RESPONSE)
+			auxVc = baseRouting::responseVc;
+		else
+			auxVc = baseRouting::petitionVc;
+
+		assert(auxVc.size() == baseRouting::typeVc.size());
+
+		if (inType == 'p')
+			index = -1;
+		else {
+			for (i = 0; i < auxVc.size(); i++) {
+				if (inType == baseRouting::typeVc[i] && inVC == auxVc[i]) {
+					index = i;
+					break;
+				}
+			}
+		}
+		assert(index < (int) auxVc.size());
+		/* If next hop is local misrouting, VC is picked from immediate previous
+		 * local hop VC. */
+		if (outP != baseRouting::minOutputPort(flit->destId) && outType == 'a' && inType != 'p') {
+			for (i = index; i >= 0; i--) {
+				if (baseRouting::typeVc[i] == 'a') {
+					next_channel = auxVc[i];
+					break;
+				}
+			}
+		} else {
+			for (i = index + 1; i < auxVc.size(); i++) {
+				if (outType == baseRouting::typeVc[i]) {
+					next_channel = auxVc[i];
+					break;
+				}
+			}
+		}
+
+		if (outType == 'p'
+				|| (baseRouting::switchM->hPos == flit->sourceGroup && flit->localMisroutingDone && outType == 'a'))
+			next_channel = inVC;
+		assert(next_channel >= 0 && next_channel < g_channels); // Sanity check
+		return (next_channel);
 	}
 };
 

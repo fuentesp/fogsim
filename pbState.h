@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -34,11 +34,11 @@ public:
 	virtual ~pbState();
 	void readFlit(const pbFlit& flit);
 	pbFlit* createFlit(int latency);
-	void update(int port, int channel, bool linkCongested);
-	bool isCongested(int link, int channel);
+	void update(int port, unsigned short cos, int channel, bool linkCongested);
+	bool isCongested(int link, unsigned short cos, int channel);
 private:
 	int m_switchApos;
-	bool** m_globalLinkCongested;
+	bool*** m_globalLinkCongested;
 	int m_offset; /* offset of the current switch's first global link
 	 *				 within the group's global links */
 };

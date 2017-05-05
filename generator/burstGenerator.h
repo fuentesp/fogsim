@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -37,7 +37,7 @@ public:
 	burstGenerator(int interArrivalTime, string name, int sourceLabel, int pPos, int aPos, int hPos,
 			switchModule *switchM);
 	~burstGenerator();
-	void generateFlit();
+	flitModule* generateFlit(FlitType flitType = RESPONSE, int destId = -1);
 };
 
 #endif /* BURSTGENERATOR_H_ */

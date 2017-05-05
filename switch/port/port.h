@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -31,12 +31,13 @@ using namespace std;
 class port {
 protected:
 	int label;
+	unsigned short cosLevels;
 	int numVCs;
 	switchModule * m_sw;
 public:
-	port(int numVCs, int portNumber, switchModule * sw);
-	~port();
-	inline virtual bool extract(int vc, flitModule* &flitExtracted, float length) {
+	port(unsigned short cosLevels, int numVCs, int portNumber, switchModule * sw);
+	virtual ~port();
+	inline virtual bool extract(unsigned short cos, int vc, flitModule* &flitExtracted, float length, int buffer = 0) {
 		assert(0);
 		return false;
 	}

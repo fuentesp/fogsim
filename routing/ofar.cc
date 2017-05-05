@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -194,13 +194,14 @@ int ofar::nominateCandidates(flitModule * flit, int inPort, int minOutP, double 
 		/* Select VC with more credits available */
 		crd = nextC = 0;
 		for (i = 0; i < g_local_link_channels; i++) {
-			if (crd < switchM->getCredits(outP, i)) {
-				crd = switchM->getCredits(outP, i);
+			if (crd < switchM->getCredits(outP, flit->cos, i)) {
+				crd = switchM->getCredits(outP, flit->cos, i);
 				nextC = i;
 			}
 		}
 		can_rx_flit = switchM->nextPortCanReceiveFlit(outP);
-		q_non_min = switchM->getCreditsOccupancy(outP, nextC) * 100.0 / switchM->getMaxCredits(outP, nextC);
+		q_non_min = switchM->getCreditsOccupancy(outP, flit->cos, nextC) * 100.0
+				/ switchM->getMaxCredits(outP, flit->cos, nextC);
 
 		valid_candidate = ((q_non_min <= threshold) || g_forceMisrouting || misroute == GLOBAL_MANDATORY)
 				&& (crd >= g_flit_size) && can_rx_flit && (outP != minOutP);
@@ -228,7 +229,7 @@ candidate ofar::escapeNetworkCandidate(flitModule *flit, int inPort, int inVC, i
 	int vc_offset, vc_range, i, dist;
 	candidate escapePath = { -1, -1, -1 };
 
-	int crd = switchM->getCredits(outP, outVC);
+	int crd = switchM->getCredits(outP, flit->cos, outVC);
 	/* Determine if flit comes from a escape network port */
 	switch (g_deadlock_avoidance) {
 		case RING:
@@ -301,8 +302,8 @@ candidate ofar::escapeNetworkCandidate(flitModule *flit, int inPort, int inVC, i
 		/* Select VC with max number of credits. */
 		crd = 0;
 		for (i = vc_offset; i < vc_range; i++) {
-			if (switchM->getCredits(escapePath.port, i)) {
-				crd = switchM->getCredits(escapePath.port, i);
+			if (switchM->getCredits(escapePath.port, flit->cos, i)) {
+				crd = switchM->getCredits(escapePath.port, flit->cos, i);
 				escapePath.vc = i;
 			}
 		}

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -28,10 +28,10 @@ using namespace std;
 
 class inPort: public port, public bufferedPort {
 public:
-	inPort(int numVCs, int portNumber, int bufferNumber, int bufferCapacity, float delay, switchModule * sw,
-			int reservedBufferCapacity = 0);
+	inPort(unsigned short cosLevels, int numVCs, int portNumber, int bufferNumber, int bufferCapacity, float delay,
+			switchModule * sw, int reservedBufferCapacity = 0);
 	~inPort();
-	virtual bool extract(int vc, flitModule* &flitExtracted, float length);
+	virtual bool extract(unsigned short cos, int vc, flitModule* &flitExtracted, float length);
 	virtual void insert(int vc, flitModule *flit, float txLength);
 };
 

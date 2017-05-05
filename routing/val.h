@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,6 +22,7 @@
 #define class_val
 
 #include "routing.h"
+#include "flexibleRouting.h"
 
 template<class base>
 class val: public base {
@@ -31,9 +32,88 @@ public:
 
 	val(switchModule *switchM) :
 			base(switchM) {
+		const int minLocalVCs = 3, minGlobalVCs = 2;
 		assert(g_deadlock_avoidance == DALLY); // Sanity check
-		assert(g_local_link_channels >= 3 && g_global_link_channels >= 2);
-		int vc;
+		assert(g_local_link_channels >= minLocalVCs && g_global_link_channels >= minGlobalVCs);
+		if (g_vc_usage == FLEXIBLE) {
+			int petLocalVCs = g_local_link_channels - g_local_res_channels;
+			int petGlobalVCs = g_global_link_channels - g_global_res_channels;
+			int vc;
+			/* Fill in VC arrays */
+			if (g_global_link_channels > minGlobalVCs) {
+				for (vc = petLocalVCs - minLocalVCs;
+						vc <= (petLocalVCs - minLocalVCs) + (petGlobalVCs - minGlobalVCs) - 1; vc++) {
+					baseRouting::globalVc.push_back(vc);
+				}
+			}
+			baseRouting::globalVc.push_back(petLocalVCs + petGlobalVCs - 4);
+			baseRouting::globalVc.push_back(petLocalVCs + petGlobalVCs - 2);
+			if (petLocalVCs > minLocalVCs) {
+				for (vc = 0; vc <= petLocalVCs - minLocalVCs - 1; vc++) {
+					baseRouting::localVcSource.push_back(vc);
+					baseRouting::localVcInter.push_back(vc);
+					baseRouting::localVcDest.push_back(vc);
+				}
+			}
+
+			/* We include one additional VC value in local source array because flexible
+			 * VC usage discards highest VC when performing misrouting, and first Valiant
+			 * hop is always non-minimal. */
+			baseRouting::localVcSource.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::localVcSource.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcInter.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::localVcInter.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 5);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 3);
+			baseRouting::localVcDest.push_back(petLocalVCs + petGlobalVCs - 1);
+
+			assert(baseRouting::globalVc.size() == petGlobalVCs);
+			assert(baseRouting::localVcSource.size() == petLocalVCs - 1);
+			assert(baseRouting::localVcInter.size() == petLocalVCs - 1);
+			assert(baseRouting::localVcDest.size() == petLocalVCs);
+
+			if (g_reactive_traffic) {
+				/* Under Flexible VC usage, response messages can use both its
+				 * reserved VCs plus those of the petitions. */
+				assert(g_local_res_channels >= minLocalVCs && g_global_res_channels >= minGlobalVCs);
+				baseRouting::globalResVc = baseRouting::globalVc;
+				if (g_global_res_channels > minGlobalVCs) {
+					for (vc = g_local_link_channels - minLocalVCs + petGlobalVCs;
+							vc <= g_local_link_channels - minLocalVCs + g_global_link_channels - minGlobalVCs - 1;
+							vc++) {
+						baseRouting::globalResVc.push_back(vc);
+					}
+				}
+				baseRouting::globalResVc.push_back(g_local_link_channels + g_global_link_channels - 4);
+				baseRouting::globalResVc.push_back(g_local_link_channels + g_global_link_channels - 2);
+				baseRouting::localResVcSource = baseRouting::localVcDest;
+				baseRouting::localResVcInter = baseRouting::localVcDest;
+				baseRouting::localResVcDest = baseRouting::localVcDest;
+				if (g_local_res_channels > minLocalVCs) {
+					for (vc = petLocalVCs + petGlobalVCs; vc <= g_local_link_channels - minLocalVCs + petGlobalVCs - 1;
+							vc++) {
+						baseRouting::localResVcSource.push_back(vc);
+						baseRouting::localResVcInter.push_back(vc);
+						baseRouting::localResVcDest.push_back(vc);
+					}
+				}
+				/* We include an additional VC value in source array to fix 2 cases:
+				 A) Inter group is src group, to distinguish between minimal and misroute hop;
+				 B) Inter group is dest group, so local hop in source group is minimal. */
+				baseRouting::localResVcSource.push_back(g_local_link_channels + g_global_link_channels - 5);
+				baseRouting::localResVcSource.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcInter.push_back(g_local_link_channels + g_global_link_channels - 5);
+				baseRouting::localResVcInter.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcDest.push_back(g_local_link_channels + g_global_link_channels - 5);
+				baseRouting::localResVcDest.push_back(g_local_link_channels + g_global_link_channels - 3);
+				baseRouting::localResVcDest.push_back(g_local_link_channels + g_global_link_channels - 1);
+
+				assert(baseRouting::globalResVc.size() == g_global_link_channels);
+				assert(baseRouting::localResVcSource.size() == g_local_link_channels - 1);
+				assert(baseRouting::localResVcInter.size() == g_local_link_channels - 1);
+				assert(baseRouting::localResVcDest.size() == g_local_link_channels);
+			}
+		}
 	}
 	~val() {
 	}

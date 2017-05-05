@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -27,34 +27,39 @@ using namespace std;
 
 class outPort: public port {
 protected:
-	int *occupancyCredits;
+	int **occupancyCredits;
+	int **minOccupancyCredits;
 public:
-	int *maxCredits;
+	int **maxCredits;
 
-	outPort(int numVCs, int portNumber, switchModule * sw);
-	~outPort();
-	virtual void insert(int vc, flitModule *flit, float txLength);
-	virtual int getOccupancy(int vc);
-	virtual int getTotalOccupancy(int vc);
-	void setMaxOccupancy(int vc, int phits);
-	int getMaxOccupancy(int vc);
-	void increaseOccupancy(int vc, int phits);
-	void decreaseOccupancy(int vc, int phits);
+	outPort(unsigned short cosLevels, int numVCs, int portNumber, switchModule * sw);
+	virtual ~outPort() override;
+	virtual void insert(int vc, flitModule *flit, float txLength, int buffer = 0);
+	virtual int getOccupancy(unsigned short cos, int vc);
+	virtual int getTotalOccupancy(unsigned short cos, int vc, int buffer = 0);
+	void setMaxOccupancy(unsigned short cos, int vc, int phits);
+	int getMaxOccupancy(unsigned short cos, int vc);
+	virtual int getMinOccupancy(unsigned short cos, int vc);
+	void increaseOccupancy(unsigned short cos, int vc, int phits);
+	void decreaseOccupancy(unsigned short cos, int vc, int phits);
+	void decreaseMinOccupancy(unsigned short cos, int vc, int phits);
 
 	/* Added for bufferedOutPort compatibility */
-	virtual void setMaxOutOccupancy(int vc, int phits) {
+	virtual void setMaxOutOccupancy(unsigned short cos, int vc, int phits) {
 	}
-	virtual int getSpace(int vc) {
+	virtual int getSpace(int vc, int buffer = 0) {
 	}
-	virtual void checkFlit(int vc, flitModule* &nextFlit) {
+	virtual void checkFlit(unsigned short cos, int vc, flitModule* &nextFlit, int buffer = 0, int offset = 0) {
 	}
-	virtual int getBufferOccupancy(int vc) {
+	virtual int getBufferOccupancy(int vc, int buffer = 0) {
 	}
-	virtual bool canSendFlit(int vc) {
+	virtual bool canSendFlit(unsigned short cos, int vc, int buffer = 0) {
 	}
 	virtual bool canReceiveFlit(int vc) {
 	}
 	virtual void reorderBuffer(int vc) {
+	}
+	virtual int getNumPetitions() {
 	}
 };
 

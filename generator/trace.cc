@@ -1,7 +1,7 @@
 /**
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  FSIN Functional Simulator of Interconnection Networks
  Copyright (2003-2011) J. Miguel-Alonso, J. Navaridas

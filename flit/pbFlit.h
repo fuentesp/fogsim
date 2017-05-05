@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -32,11 +32,11 @@ class creditFlit;
  */
 class pbFlit {
 public:
-	pbFlit(int srcOffset, bool ** globalLinkCongested, float arrivalCycle);
+	pbFlit(int srcOffset, bool *** globalLinkCongested, float arrivalCycle);
 	pbFlit(const pbFlit& original);
 	virtual ~pbFlit();
 	float getArrivalCycle() const;
-	bool getGlobalLinkInfo(int n, int channel) const;
+	bool getGlobalLinkInfo(int n, unsigned short cos, int channel) const;
 	int getSrcOffset() const;
 	/* Priority comparison */
 	bool operator <(const pbFlit& flit) const;
@@ -53,7 +53,7 @@ private:
 	 * global link in the source switch
 	 * (size = g_h_global_ports_per_router)
 	 */
-	bool **m_globalLinkInfo;
+	bool ***m_globalLinkInfo;
 	float m_arrivalCycle;
 	float m_generatedCycle;
 	long long m_id;

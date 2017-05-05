@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -24,9 +24,11 @@
 #include "generator/generatorModule.h"
 #include "generator/burstGenerator.h"
 #include "generator/traceGenerator.h"
+#include "generator/graph500Generator.h"
 #include "switch/ioqSwitchModule.h"
 #include <math.h>
 #include <sstream>
+#include <iomanip>
 using namespace std;
 
 int module(int a, int b) {
@@ -46,9 +48,16 @@ bool parity(int a, int b) {
 int main(int argc, char *argv[]) {
 	int i, j;
 
+	/* Print back command from prompt; useful for cluster use */
+	for (i = 0; i < argc; i++) {
+		cout << argv[i] << " ";
+	}
+	cout << endl;
+
 	/* Read parameters in config file */
 	readConfiguration(argc, argv);
 	srand(g_seed);
+	g_reng.seed(g_seed);
 
 	/* Open output file */
 	g_output_file.open(g_output_file_name, ios::out);
@@ -56,8 +65,13 @@ int main(int argc, char *argv[]) {
 		cerr << "Can't open the output file" << g_output_file_name << endl;
 		exit(-1);
 	}
+	g_output_file.close();
 
 	createNetwork();
+
+#if DEBUG
+	cout << "Network has been created" << endl;
+#endif
 
 	/* Read/translate trace-related files */
 	if (g_traffic == TRACE) {
@@ -95,10 +109,12 @@ int main(int argc, char *argv[]) {
 
 	cout << "Write output" << endl;
 	writeOutput();
-	g_output_file.close();
 
-	writeLatencyHistogram(g_output_file_name);
-	writeHopsHistogram(g_output_file_name);
+	if (g_print_hists) {
+		writeLatencyHistogram(g_output_file_name);
+		writeHopsHistogram(g_output_file_name);
+		writeGeneratorsInjectionProbability(g_output_file_name);
+	}
 	if (g_transient_stats) writeTransientOutput(g_output_file_name);
 
 	freeMemory();
@@ -117,7 +133,7 @@ void readConfiguration(int argc, char *argv[]) {
 	char * filename = argv[1];
 	int i, j, total_trace_nodes;
 	string value;
-	vector < string > list_values;
+	vector<string> list_values;
 	ConfigFile config;
 
 	/* Open configuration file */
@@ -165,7 +181,12 @@ void readConfiguration(int argc, char *argv[]) {
 
 	assert(config.getKeyValue("CONFIG", "MaxCycles", value) == 0);
 	g_max_cycles = atoi(value.c_str());
-	g_warmup_cycles = g_max_cycles;
+	if (config.getKeyValue("CONFIG", "WarmupCycles", value) == 0)
+		g_warmup_cycles = atoi(value.c_str());
+	else
+		g_warmup_cycles = g_max_cycles;
+
+	if (config.getKeyValue("CONFIG", "PrintCycles", value) == 0) g_print_cycles = atoi(value.c_str());
 
 	assert(config.getKeyValue("CONFIG", "ArbiterIterations", value) == 0);
 	g_allocator_iterations = atoi(value.c_str());
@@ -179,16 +200,14 @@ void readConfiguration(int argc, char *argv[]) {
 	assert(config.getKeyValue("CONFIG", "GlobalQueueLength", value) == 0);
 	g_global_queue_length = atoi(value.c_str());
 
-	assert(config.getKeyValue("CONFIG", "RingInjectionBubble", value) == 0);
-	g_ring_injection_bubble = atoi(value.c_str());
-
 	assert(config.getKeyValue("CONFIG", "Probability", value) == 0);
-	g_injection_probability = atoi(value.c_str());
+	g_injection_probability = atof(value.c_str());
 
 	assert(config.getKeyValue("CONFIG", "Seed", value) == 0);
 	g_seed = atoi(value.c_str());
 
 	assert(config.getKeyValue("CONFIG", "OutputFileName", value) == 0);
+	g_output_file_name = new char[value.length() + 1];
 	strcpy(g_output_file_name, value.c_str());
 
 	assert(config.getKeyValue("CONFIG", "LocalLinkTransmissionDelay", value) == 0);
@@ -220,14 +239,39 @@ void readConfiguration(int argc, char *argv[]) {
 	assert(config.getKeyValue("CONFIG", "InjectionChannels", value) == 0);
 	g_injection_channels = atoi(value.c_str());
 
+	if (config.getKeyValue("CONFIG", "VcInjectionPolicy", value) == 0) {
+		readVcInj(value.c_str(), &g_vc_injection);
+	}
+
+	if (config.getKeyValue("CONFIG", "VcUsage", value) == 0) {
+		readVcUsage(value.c_str(), &g_vc_usage);
+	}
+
 	g_channels = (g_injection_channels > g_local_link_channels) ? g_injection_channels : g_local_link_channels;
 	if (g_global_link_channels > g_channels) g_channels = g_global_link_channels;
+	if (g_vc_usage == FLEXIBLE) {
+		g_channels = g_local_link_channels + g_global_link_channels;
+		if (config.getKeyValue("CONFIG", "VcAllocation", value) == 0) readVcAlloc(value.c_str(), &g_vc_alloc);
+	}
 
 	assert(config.getKeyValue("CONFIG", "PalmTreeConfiguration", value) == 0);
 	g_palm_tree_configuration = atoi(value.c_str());
 
+	if (config.getKeyValue("CONFIG", "InputArbiter", value) == 0) {
+		readArbiterType(value.c_str(), &g_input_arbiter_type);
+	}
+	if (config.getKeyValue("CONFIG", "OutputArbiter", value) == 0) {
+		readArbiterType(value.c_str(), &g_output_arbiter_type);
+	}
 	if (config.getKeyValue("CONFIG", "TransitPriority", value) == 0) {
-		g_transit_priority = atoi(value.c_str());
+		cerr
+				<< "WARNING: deprecated parameter: TransitPriority. This parameter should be replaced by a LRS/PrioLRS OutputArbiter parameter."
+				<< endl;
+		if (atoi(value.c_str()) == 1) {
+			g_output_arbiter_type = PrioLRS;
+		} else {
+			g_output_arbiter_type = LRS;
+		}
 	}
 
 	/* Switch type */
@@ -244,12 +288,87 @@ void readConfiguration(int argc, char *argv[]) {
 			if (config.getKeyValue("CONFIG", "InternalSpeedup", value) == 0) {
 				g_internal_speedup = strtod(value.c_str(), NULL);
 			}
+
+			if (config.getKeyValue("CONFIG", "NumberSegregatedTrafficFlows", value) == 0) {
+				g_segregated_flows = atoi(value.c_str());
+				assert(g_segregated_flows >= 1 && g_segregated_flows < 3); /* Number of flows
+				 needs to be equal or greater than 1; currently only up to 2 flows are supported */
+			}
 		}
+	}
+
+	/* Buffer type */
+	if (config.getKeyValue("CONFIG", "Buffer", value) == 0) {
+		readBufferType(value.c_str(), &g_buffer_type);
+
+		if (g_buffer_type == DYNAMIC) {
+			assert(config.getKeyValue("CONFIG", "ReservedBufferLocal", value) == 0);
+			g_local_queue_reserved = atoi(value.c_str());
+			if (g_local_queue_reserved > (g_local_queue_length / g_flit_size / g_local_link_channels))
+				cerr << "ERROR! with DYNAMIC buffers; for a local link buffer size of " << g_local_queue_length
+						<< " phits and " << g_local_link_channels << " vcs, maximum reserved memory must be <= "
+						<< (g_local_queue_length / g_flit_size / g_local_link_channels) << " pkts (input value: "
+						<< g_local_queue_reserved << ")" << endl;
+			assert(g_local_queue_reserved <= (g_local_queue_length / g_flit_size / g_local_link_channels));
+
+			assert(config.getKeyValue("CONFIG", "ReservedBufferGlobal", value) == 0);
+			g_global_queue_reserved = atoi(value.c_str());
+			if (g_global_queue_reserved > (g_global_queue_length / g_flit_size / g_global_link_channels))
+				cerr << "ERROR! with DYNAMIC buffers; for a local link buffer size of " << g_global_queue_length
+						<< " phits and " << g_global_link_channels << " vcs, maximum reserved memory must be <= "
+						<< (g_global_queue_length / g_flit_size / g_global_link_channels) << " pkts (input value: "
+						<< g_global_queue_reserved << ")" << endl;
+			assert(g_global_queue_reserved <= (g_global_queue_length / g_flit_size / g_global_link_channels));
+		}
+	}
+
+	/* Class of service levels */
+	if (config.getKeyValue("CONFIG", "CosLevels", value) == 0) {
+		g_cos_levels = atoi(value.c_str());
+		assert(g_cos_levels > 0 && g_cos_levels < 9);
 	}
 
 	/* Traffic pattern */
 	assert(config.getKeyValue("CONFIG", "Traffic", value) == 0);
 	readTrafficPattern(value.c_str(), &g_traffic);
+	switch (g_traffic) {
+		case UN_RCTV:
+			g_reactive_traffic = true;
+			g_traffic = UN;
+			break;
+		case ADV_RANDOM_NODE_RCTV:
+			g_reactive_traffic = true;
+			g_traffic = ADV_RANDOM_NODE;
+			break;
+		case BURSTY_UN_RCTV:
+			g_reactive_traffic = true;
+			g_traffic = BURSTY_UN;
+			break;
+	}
+
+	/* Reactive traffic patterns need to have initial injection probability halved because
+	 * every petition triggers a response packet, effectively doubling the amount of communications.
+	 * Also the VCs must be evenly split between the two ways, making up for an even number of
+	 * VCs in local and global links. */
+	if (g_reactive_traffic) {
+		g_injection_probability /= 2;
+		assert(g_routing != OFAR); /* Currently OFAR does not support reactive traffic due to the use of VCs that is hard-coded into the OFAR class */
+		/* With Flexible VC usage, we need to set the number of VCs reserved for the responses */
+		if (g_vc_usage == FLEXIBLE) {
+			assert(config.getKeyValue("CONFIG", "LocalResChannels", value) == 0);
+			g_local_res_channels = atoi(value.c_str());
+			assert(config.getKeyValue("CONFIG", "GlobalResChannels", value) == 0);
+			g_global_res_channels = atoi(value.c_str());
+		} else {
+			assert((g_local_link_channels % 2) == 0);
+			assert((g_global_link_channels % 2) == 0);
+		}
+		if (config.getKeyValue("CONFIG", "MaxPetitionsOnFlight", value) == 0) {
+			g_max_petitions_on_flight = atoi(value.c_str());
+			assert(g_max_petitions_on_flight > 0);
+		}
+	}
+
 	switch (g_traffic) {
 		case ADV:
 		case ADV_RANDOM_NODE:
@@ -263,6 +382,8 @@ void readConfiguration(int argc, char *argv[]) {
 		case ADVc:
 			break;
 		case MIX:
+			assert(config.getKeyValue("CONFIG", "AdvTrafficDistance", value) == 0);
+			g_adv_traffic_distance = atoi(value.c_str());
 			assert(config.getKeyValue("CONFIG", "AdvTrafficLocalDistance", value) == 0);
 			g_adv_traffic_local_distance = atoi(value.c_str());
 			assert(config.getKeyValue("CONFIG", "randomTrafficPercent", value) == 0);
@@ -341,6 +462,96 @@ void readConfiguration(int argc, char *argv[]) {
 			assert(config.getKeyValue("CONFIG", "avgBurstLength", value) == 0);
 			g_bursty_avg_length = atoi(value.c_str());
 			break;
+		case GRAPH500:
+			assert(g_deadlock_avoidance == DALLY && g_flit_size == g_packet_size);
+			assert(config.getKeyValue("CONFIG", "GraphCoalescingSize", value) == 0);
+			g_graph_coalescing_size = atoi(value.c_str());
+			if (config.getKeyValue("CONFIG", "GraphQueryTime", value) == 0) {
+				g_graph_query_time = atof(value.c_str());
+				g_injection_probability = (100.0 * g_flit_size) / (g_graph_query_time * g_graph_coalescing_size);
+			} else
+				g_graph_query_time = (100.0 * g_flit_size) / (g_injection_probability * g_graph_coalescing_size);
+			if (config.getListValues("CONFIG", "GraphNodesCapMod", list_values) == 0) {
+				assert(int(list_values.size()) <= g_number_generators);
+				for (i = 0; i < list_values.size(); i++) {
+					assert(atoi(list_values[i].c_str()) < g_number_generators);
+					g_graph_nodes_cap_mod.push_back(atoi(list_values[i].c_str()));
+				}
+			} else if (config.getKeyValue("CONFIG", "GraphNodesCapMod", value) == 0) {
+				assert(atoi(value.c_str()) < g_number_generators);
+				g_graph_nodes_cap_mod.push_back(atoi(value.c_str()));
+			}
+			if (g_graph_nodes_cap_mod.size() > 0) {
+				assert(config.getKeyValue("CONFIG", "GraphCapModFactor", value) == 0);
+				g_graph_cap_mod_factor = atoi(value.c_str());
+				assert(g_graph_cap_mod_factor > 0 && g_graph_cap_mod_factor <= 200);
+			}
+			assert(config.getKeyValue("CONFIG", "GraphScale", value) == 0);
+			g_graph_scale = atoi(value.c_str());
+			assert(config.getKeyValue("CONFIG", "GraphEdgefactor", value) == 0);
+			g_graph_edgefactor = atoi(value.c_str());
+			if (config.getKeyValue("CONFIG", "GraphMaxLevels", value) == 0) g_graph_max_levels = atoi(value.c_str());
+			/* Reused variables from trace generators: if specified, use the number of
+			 * processes used to run the benchmark and the number of benchmark instances.
+			 * By default consider that the benchmark execution employs the whole system. */
+			g_num_traces = 1;
+			if (config.getKeyValue("CONFIG", "GraphProcesses", value) == 0)
+				g_trace_nodes.push_back(atol(value.c_str()));
+			else
+				g_trace_nodes.push_back(g_number_generators);
+			if (config.getKeyValue("CONFIG", "GraphInstances", value) == 0)
+				g_trace_instances.push_back(atoi(value.c_str()));
+			else
+				g_trace_instances.push_back(1);
+			assert(g_trace_nodes[0] * g_trace_instances[0] <= g_number_generators);
+			/* 2 ways of specifying benchmark layout: through a trace map
+			 * file, and selecting a preset trace distribution */
+			if (config.getKeyValue("CONFIG", "TraceMap", value) == 0) {
+				readTraceMap(value.c_str());
+			} else {
+				if (config.checkSection("TRACE_MAP")) {
+					readTraceMap(filename);
+				} else {
+					if (config.getKeyValue("CONFIG", "TraceDistribution", value) == 0)
+						readTraceDistribution(value.c_str(), &g_trace_distribution);
+					assert(g_trace_instances.size() != 0); // Sanity check; value was previously collected
+					buildTraceMap();
+				}
+			}
+			if (config.getKeyValue("CONFIG", "GraphRootDegree", value) == 0)
+				for (i = 0; i < g_trace_instances[0]; i++)
+					g_graph_root_degree.push_back(atoi(value.c_str()));
+			else {
+				/* If a root vertex connectivity is not provided, determine it through a lognormal distribution */
+				lognormal_distribution<float> g_graph_lognormal(
+						log(pow(0.3604, g_graph_scale)) + 1.0661704 * g_graph_scale, 0.079313065 * g_graph_scale);
+				for (i = 0; i < g_trace_instances[0]; i++)
+					g_graph_root_degree.push_back(ceil(g_graph_lognormal(g_reng)));
+			}
+			for (i = 0; i < g_trace_instances[0]; i++) {
+				g_graph_tree_level.push_back(0);
+				/* Choose a random node of the current instance as root */
+				g_graph_root_node.push_back(
+						g_trace_2_gen_map[0][rand() / (int) (((unsigned) RAND_MAX + 1) / (g_trace_nodes[0]))][i]);
+				/* Upper bound of the p2p queries */
+				g_graph_queries_remain.push_back(
+						pow(2, g_graph_scale + 1) * g_graph_edgefactor * ((g_trace_nodes[0] - 1.0) / g_trace_nodes[0]));
+				g_graph_queries_rem_minus_means.push_back(
+						g_graph_queries_remain[i]
+								- ceil(g_graph_root_degree[i] * (g_trace_nodes[0] - 1.0) / g_trace_nodes[0]));
+			}
+#if DEBUG	/* These statistics are not computed in a release compilation because they eat too much memory */
+			g_graph_p2pmess_node2node = new long long **[g_graph_max_levels];
+			for (int l = 0; l < g_graph_max_levels; l++) {
+				g_graph_p2pmess_node2node[l] = new long long *[g_number_generators];
+				for (i = 0; i < g_number_generators; i++) {
+					g_graph_p2pmess_node2node[l][i] = new long long[g_number_generators];
+					for (int z = 0; z < g_number_generators; z++)
+					g_graph_p2pmess_node2node[l][i][z] = 0;
+				}
+			}
+#endif
+			break;
 		case TRACE:
 			/* TRACE simulations need to be REDEFINED!! to use a map of assignments */
 
@@ -403,15 +614,6 @@ void readConfiguration(int argc, char *argv[]) {
 
 			}
 
-			/* Initiate trace2gen map */
-			for (i = 0; i < g_num_traces; i++) {
-				vector < vector<int> > aux; // Aux vector
-				for (j = 0; j < g_trace_nodes[i]; j++) {
-					aux.push_back(vector<int>()); // Add an empty vector (will be later increased by every gen mapped to the trace node)
-				}
-				g_trace_2_gen_map.push_back(aux);
-			}
-
 			/* 2 ways of specifying trace layout: through a trace map
 			 * file, and selecting a preset trace distribution */
 			if (config.getKeyValue("CONFIG", "TraceMap", value) == 0) {
@@ -465,6 +667,8 @@ void readConfiguration(int argc, char *argv[]) {
 			assert(config.getKeyValue("CONFIG", "rings", value) == 0);
 			g_rings = atoi(value.c_str());
 			assert(g_rings >= 1);
+			assert(config.getKeyValue("CONFIG", "RingInjectionBubble", value) == 0);
+			g_ring_injection_bubble = atoi(value.c_str());
 			assert(config.getKeyValue("CONFIG", "ringDirs", value) == 0);
 			g_ringDirs = atoi(value.c_str());
 			assert(g_ringDirs == 0 || g_ringDirs == 1 || g_ringDirs == 2);
@@ -486,6 +690,8 @@ void readConfiguration(int argc, char *argv[]) {
 				assert(config.getKeyValue("CONFIG", "onlyRing2", value) == 0);
 				g_onlyRing2 = atoi(value.c_str());
 			}
+			assert(config.getKeyValue("CONFIG", "RingInjectionBubble", value) == 0);
+			g_ring_injection_bubble = atoi(value.c_str());
 			assert(config.getKeyValue("CONFIG", "channels_ring", value) == 0);
 			g_channels_escape = atoi(value.c_str());
 			// Sanity checks
@@ -559,6 +765,8 @@ void readConfiguration(int argc, char *argv[]) {
 			break;
 		case OBL:
 			assert(g_deadlock_avoidance == DALLY);
+			if (config.getKeyValue("CONFIG", "ResetValNode", value) == 0)
+				g_reset_val = atoi(value.c_str());
 			break;
 		case PAR:
 			assert(g_deadlock_avoidance == DALLY);
@@ -572,9 +780,15 @@ void readConfiguration(int argc, char *argv[]) {
 			g_ugal_local_threshold = atoi(value.c_str());
 			break;
 		case SRC_ADP:
+			assert(config.getKeyValue("CONFIG", "CongestionDetection", value) == 0);
+			readCongestionDetection(value.c_str(), &g_congestion_detection);
+			if (config.getKeyValue("CONFIG", "ResetValNode", value) == 0)
+				g_reset_val = atoi(value.c_str());
 		case PB:
 		case PB_ANY:
 			assert(g_deadlock_avoidance == DALLY);
+			assert(config.getKeyValue("CONFIG", "CongestionDetection", value) == 0);
+			readCongestionDetection(value.c_str(), &g_congestion_detection);
 			assert(config.getKeyValue("CONFIG", "piggybacking_coef", value) == 0);
 			g_piggyback_coef = atoi(value.c_str());
 			assert(g_piggyback_coef > 0);
@@ -590,6 +804,8 @@ void readConfiguration(int argc, char *argv[]) {
 		case OLM:
 			assert(g_deadlock_avoidance == DALLY);
 			assert(config.getKeyValue("CONFIG", "MisroutingTrigger", value) == 0);
+			assert(config.getKeyValue("CONFIG", "CongestionDetection", value) == 0);
+			readCongestionDetection(value.c_str(), &g_congestion_detection);
 			break;
 		case OFAR:
 			assert(
@@ -618,7 +834,7 @@ void readConfiguration(int argc, char *argv[]) {
 				assert(config.getKeyValue("CONFIG", "VcMisroutingCongestedRestrictionThreshold", value) == 0);
 				g_vc_misrouting_congested_restriction_th = atoi(value.c_str());
 				break;
-			case HYBRID: // Hybrid (contention OR congestion aware): needs both parameters for CA and CGA thresholds
+			case HYBRID: /* Hybrid (contention OR congestion aware): needs both parameters for CA and CGA thresholds */
 				g_relative_threshold = 1;
 				g_vc_misrouting_congested_restriction = 1;
 				assert(config.getKeyValue("CONFIG", "VcMisroutingCongestedRestrictionCoefPercent", value) == 0);
@@ -634,6 +850,10 @@ void readConfiguration(int argc, char *argv[]) {
 				assert(config.getKeyValue("CONFIG", "ContentionThreshold", value) == 0);
 				g_contention_aware_th = atoi(value.c_str());
 				assert(g_contention_aware_th >= 0);
+				if (config.getKeyValue("CONFIG", "ContentionLocalThreshold", value) == 0) {
+					g_contention_aware_local_th = atoi(value.c_str());
+					assert(g_contention_aware_local_th >= 0);
+				}
 				if (config.getKeyValue("CONFIG", "increaseContentionAtHeader", value) == 0) {
 					g_increaseContentionAtHeader = atoi(value.c_str());
 				}
@@ -701,6 +921,8 @@ void readConfiguration(int argc, char *argv[]) {
 				assert(config.getKeyValue("CONFIG", "ThMin", value) == 0);
 				g_th_min = atoi(value.c_str());
 				assert(g_th_min >= 0 && g_th_min <= 100);
+				assert(config.getKeyValue("CONFIG", "CongestionDetection", value) == 0);
+				readCongestionDetection(value.c_str(), &g_congestion_detection);
 				break;
 			default:
 				break;
@@ -708,6 +930,8 @@ void readConfiguration(int argc, char *argv[]) {
 	}
 
 	/* Optional parameters (can be avoided) */
+
+	if (config.getKeyValue("CONFIG", "PrintHists", value) == 0) g_print_hists = atoi(value.c_str());
 
 	if (config.getKeyValue("CONFIG", "forceMisrouting", value) == 0) {
 		g_forceMisrouting = atoi(value.c_str());
@@ -723,9 +947,17 @@ void readConfiguration(int argc, char *argv[]) {
 		g_issue_parallel_reqs = atoi(value.c_str());
 	}
 
+	if (config.getListValues("CONFIG", "VerboseSwitches", list_values) == 0) {
+		for (i = 0; i < list_values.size(); i++)
+			g_verbose_switches.insert(atoi(list_values[i].c_str()));
+		if (config.getKeyValue("CONFIG", "VerboseCycles", value) == 0)
+			g_verbose_cycles = atoi(value.c_str());
+	}
+
 	/* All config values have been loaded, let config descriptor be removed */
 	config.flushConfig();
 }
+
 void createNetwork() {
 	int i, j, k;
 	string swtch = "switcha_b";
@@ -735,7 +967,7 @@ void createNetwork() {
 	g_global_links_per_group = g_a_routers_per_group * g_h_global_ports_per_router;
 
 	if (g_deadlock_avoidance == EMBEDDED_TREE) {
-		g_tree_root_node = rand() % g_number_switches; // We used this node to route packets to the root switch
+		g_tree_root_node = rand() % g_number_switches; /* We used this node to route packets to the root switch */
 		cout << "treeRoot_node=" << g_tree_root_node << endl;
 		cout << "treeRoot_switch=" << int(g_tree_root_node / g_p_computing_nodes_per_router) << endl;
 		g_tree_root_switch = int(g_tree_root_node / (g_a_routers_per_group * g_p_computing_nodes_per_router));
@@ -744,10 +976,10 @@ void createNetwork() {
 	g_generators_list = new generatorModule*[g_number_generators];
 	g_switches_list = new switchModule*[g_number_switches];
 
-	if (g_rings != 0) { //Physical Ring
+	if (g_rings != 0) { /* Physical Ring */
 		if (g_deadlock_avoidance == RING) g_ports = g_ports + 2;
-		g_globalEmbeddedRingSwitchesCount = 2 * (g_a_routers_per_group * g_h_global_ports_per_router + 1); //2 switches per group with global links of the embedded ring
-		g_localEmbeddedRingSwitchesCount = g_number_switches; //every switch in the network has local links of the ring
+		g_globalEmbeddedRingSwitchesCount = 2 * (g_a_routers_per_group * g_h_global_ports_per_router + 1); /* 2 switches per group dedicate one global links to the embedded ring */
+		g_localEmbeddedRingSwitchesCount = g_number_switches; /* Every switch in the group dedicates 1 or 2 local links to the embedded ring */
 	}
 
 	g_latency_histogram_no_global_misroute.insert(g_latency_histogram_no_global_misroute.begin(),
@@ -766,10 +998,15 @@ void createNetwork() {
 	g_local_router_links_offset = g_p_computing_nodes_per_router;
 	g_global_router_links_offset = g_local_router_links_offset + g_a_routers_per_group - 1;
 
-	g_group0_numFlits = new long long[g_a_routers_per_group];
+	g_group0_numFlits = new long long**[g_a_routers_per_group];
 	g_group0_totalLatency = new long double[g_a_routers_per_group];
 	for (i = 0; i < g_a_routers_per_group; i++) {
-		g_group0_numFlits[i] = 0;
+		g_group0_numFlits[i] = new long long*[g_p_computing_nodes_per_router];
+		for (int p = 0; p < g_p_computing_nodes_per_router; p++) {
+			g_group0_numFlits[i][p] = new long long[2];
+			g_group0_numFlits[i][p][0] = 0;
+			g_group0_numFlits[i][p][1] = 0;
+		}
 		g_group0_totalLatency[i] = 0;
 	}
 
@@ -785,16 +1022,29 @@ void createNetwork() {
 		g_port_contention_counter[i] = 0;
 	}
 
-	for (i = 0; i < (g_a_routers_per_group - 1); i++) {
-		g_vc_counter.push_back(vector<long long>(g_local_link_channels, 0));
-	}
-	for (i = 0; i < g_h_global_ports_per_router; i++) {
-		g_vc_counter.push_back(vector<long long>(g_global_link_channels, 0));
+	switch (g_vc_usage) {
+		case BASE:
+			for (i = 0; i < (g_a_routers_per_group - 1); i++) {
+				g_vc_counter.push_back(vector<long long>(g_local_link_channels, 0));
+			}
+			for (i = 0; i < g_h_global_ports_per_router; i++) {
+				g_vc_counter.push_back(vector<long long>(g_global_link_channels, 0));
+			}
+			break;
+		case FLEXIBLE:
+			for (i = 0; i < (g_a_routers_per_group - 1 + g_h_global_ports_per_router); i++) {
+				g_vc_counter.push_back(vector<long long>(g_local_link_channels + g_global_link_channels, 0));
+			}
+			break;
+		default:
+			assert(0);
+			break;
 	}
 
 	cout << "switchModule size: " << sizeof(switchModule) << endl;
 	cout << "generatorModule size: " << sizeof(generatorModule) << endl;
 
+	if (g_vc_usage == FLEXIBLE) g_channels = g_local_link_channels + g_global_link_channels;
 	for (i = 0; i < ((g_h_global_ports_per_router * g_a_routers_per_group) + 1); i++) {
 		for (j = 0; j < (g_a_routers_per_group); j++) {
 			try {
@@ -816,7 +1066,7 @@ void createNetwork() {
 				cerr << "Error making switchModule, i= " << i << ", j=" << j;
 				exit(0);
 			}
-			for (k = 0; k < (g_p_computing_nodes_per_router); k++) {
+			for (k = 0; k < g_p_computing_nodes_per_router; k++) {
 				try {
 					switch (g_traffic) {
 						case TRACE:
@@ -831,6 +1081,14 @@ void createNetwork() {
 							g_generators_list[(k + j * g_p_computing_nodes_per_router
 									+ i * (g_p_computing_nodes_per_router * g_a_routers_per_group))] =
 									new burstGenerator(1, "generator",
+											(k + j * g_p_computing_nodes_per_router
+													+ i * (g_p_computing_nodes_per_router * g_a_routers_per_group)), k,
+											j, i, g_switches_list[(j + i * g_a_routers_per_group)]);
+							break;
+						case GRAPH500:
+							g_generators_list[(k + j * g_p_computing_nodes_per_router
+									+ i * (g_p_computing_nodes_per_router * g_a_routers_per_group))] =
+									new graph500Generator(1, "graph500",
 											(k + j * g_p_computing_nodes_per_router
 													+ i * (g_p_computing_nodes_per_router * g_a_routers_per_group)), k,
 											j, i, g_switches_list[(j + i * g_a_routers_per_group)]);
@@ -908,23 +1166,21 @@ void action() {
 	g_warmup_injection_latency = 0;
 
 	/* WARMUP execution [only for synthetic traffic] */
-	if (g_traffic != TRACE) {
+	if (g_traffic != TRACE && g_traffic != GRAPH500) {
 		for (g_cycle = 0; g_cycle < g_warmup_cycles; g_cycle++) {
-			print_cycle = g_cycle % 100;
 			if (g_switch_type == BASE_SW) g_internal_cycle = g_cycle;
 			for (i = 0; i < g_number_switches; i++) {
 				if (g_congestion_management == ECM) g_switches_list[i]->escapeCongested();
 				assert(g_switches_list[i]->messagesInQueuesCounter >= 0);
-				if (g_switches_list[i]->messagesInQueuesCounter >= 1) {
-					g_switches_list[i]->action();
-				}
+				if (g_switches_list[i]->messagesInQueuesCounter >= 1) g_switches_list[i]->action();
 			}
 			for (i = 0; i < g_number_generators; i++) {
 				g_generators_list[i]->action();
 			}
-			if (print_cycle == 0) {
-				cout << "cycle:" << g_cycle << "   Messages sent:" << g_tx_flit_counter << "   Messages received:"
-						<< g_rx_flit_counter << endl;
+			if (g_cycle % g_print_cycles == 0) {
+				cout << "cycle:" << setfill(' ') << setw(8) << g_cycle << "\tMessages sent:" << setfill(' ') << setw(12)
+						<< g_tx_flit_counter << "\tMessages received:" << setfill(' ') << setw(12) << g_rx_flit_counter
+						<< endl;
 			}
 		}
 	}
@@ -957,17 +1213,23 @@ void action() {
 	for (i = 0; i < g_number_switches; i++) {
 		totalSwitchSpace = g_switches_list[i]->getTotalCapacity();
 		totalSwitchFreeSpace = g_switches_list[i]->getTotalFreeSpace();
-		flitWaitingCount = flitWaitingCount + (totalSwitchSpace - totalSwitchFreeSpace);
-
+		flitWaitingCount += totalSwitchSpace - totalSwitchFreeSpace;
 		g_switches_list[i]->resetQueueOccupancy();
-		g_tx_warmup_flit_counter = g_tx_flit_counter;
-		g_rx_warmup_flit_counter = g_rx_flit_counter;
-		g_tx_warmup_packet_counter = g_tx_packet_counter;
-		g_rx_warmup_packet_counter = g_rx_packet_counter;
-		g_warmup_flit_latency = g_flit_latency;
-		g_warmup_packet_latency = g_packet_latency;
-		g_warmup_injection_latency = g_injection_queue_latency;
 	}
+	g_tx_warmup_flit_counter = g_tx_flit_counter;
+	g_rx_warmup_flit_counter = g_rx_flit_counter;
+	g_tx_warmup_packet_counter = g_tx_packet_counter;
+	g_rx_warmup_packet_counter = g_rx_packet_counter;
+	g_warmup_flit_latency = g_flit_latency;
+	g_warmup_packet_latency = g_packet_latency;
+	g_warmup_injection_latency = g_injection_queue_latency;
+	g_response_warmup_counter = g_response_counter;
+	g_nonminimal_warmup_counter = g_nonminimal_counter;
+	g_nonminimal_warmup_inj = g_nonminimal_inj;
+	g_nonminimal_warmup_src = g_nonminimal_src;
+	g_nonminimal_warmup_int = g_nonminimal_int;
+	cout << "=== Cycle:" << g_cycle << "\tWarmup Flits Sent: " << setw(12) << g_tx_warmup_flit_counter
+			<< "\tWarmup Flits Received: " << setw(12) << g_rx_warmup_flit_counter << " ===" << endl;
 
 	/* Reset petition statistics */
 	g_petitions = 0;
@@ -976,9 +1238,8 @@ void action() {
 	g_served_injection_petitions = 0;
 
 	/* Simulation AFTER warmup */
-	if (g_traffic != TRACE) {
+	if (g_traffic != TRACE && g_traffic != GRAPH500) {
 		for (; g_cycle < (g_max_cycles + g_warmup_cycles); g_cycle++) {
-			print_cycle = g_cycle % 100;
 			if (g_switch_type == BASE_SW) g_internal_cycle = g_cycle;
 			for (i = 0; i < g_number_switches; i++) {
 				if (g_congestion_management == ECM) g_switches_list[i]->escapeCongested();
@@ -990,14 +1251,63 @@ void action() {
 			for (i = 0; i < g_number_generators; i++) {
 				if (!g_generators_list[i]->switchM->escapeNetworkCongested) g_generators_list[i]->action();
 			}
-			if (print_cycle == 0) {
-				cout << "cycle:" << g_cycle << "   Messages sent:" << g_tx_flit_counter << "   Messages received:"
-						<< g_rx_flit_counter << endl;
+			if (g_cycle % g_print_cycles == 0) {
+				cout << "cycle:" << setfill(' ') << setw(8) << g_cycle << "\tMessages sent:" << setfill(' ') << setw(12)
+						<< g_tx_flit_counter << "\tMessages received:" << setfill(' ') << setw(12) << g_rx_flit_counter
+						<< endl;
 			}
 
 			/* BURST and ALL2ALL patterns end when all messages have been received */
 			if (g_traffic == SINGLE_BURST && g_burst_generators_finished_count >= g_number_generators) break;
 			if (g_traffic == ALL2ALL && g_AllToAll_generators_finished_count >= g_number_generators) break;
+		}
+	} else if (g_traffic == GRAPH500) { // Graph500 Traffic Model
+		bool graph_model_ended = false;
+		bool graph_all_level_end;
+
+		for (g_cycle = 0; !graph_model_ended; g_cycle++) {
+			if (g_switch_type == BASE_SW) g_internal_cycle = g_cycle;
+			// Switches action
+			for (i = 0; i < g_number_switches; i++) {
+				assert(g_switches_list[i]->messagesInQueuesCounter >= 0);
+				if (g_switches_list[i]->messagesInQueuesCounter >= 1) g_switches_list[i]->action();
+			}
+			// Compute nodes action
+			for (i = 0; i < g_number_generators; i++)
+				g_generators_list[i]->action();
+			// Print information
+			if (g_cycle % g_print_cycles == 0)
+				cout << "cycle:" << setfill(' ') << setw(8) << g_cycle << "\tMessages sent:" << setfill(' ') << setw(12)
+						<< g_tx_flit_counter << "\tMessages received:" << setfill(' ') << setw(12) << g_rx_flit_counter
+						<< endl;
+			/* For each instance, check if all compute nodes are in LEVELEND state. End instance if remaining
+			 * queries are lower than 10% of total queries; increase tree level and start new level computation
+			 * otherwise. End simulation when all instances have finished. */
+			graph_model_ended = true;
+			for (i = 0; i < g_trace_instances[0]; i++) {
+				graph_all_level_end = true;
+				for (j = 0; j < g_trace_nodes[0] && graph_all_level_end; j++)
+					graph_all_level_end =
+							((graph500Generator *) g_generators_list[g_trace_2_gen_map[0][j][i]])->getState()
+									== GraphCNState::LEVELEND;
+				// Evaluate end simulation or increase level
+				if (!graph_all_level_end)
+					graph_model_ended = false;
+				else {
+					if (not (g_graph_queries_remain[i] <= 0 || (g_graph_tree_level[i] + 1) >= g_graph_max_levels
+							|| (g_graph_tree_level[i] >= 5
+									&& g_graph_queries_remain[i]
+											<= 0.1
+													* (pow(2, g_graph_scale + 1) * g_graph_edgefactor
+															* ((g_trace_nodes[0] - 1.0) / g_trace_nodes[0]))))) {
+						g_graph_tree_level[i]++;
+						for (j = 0; j < g_trace_nodes[0]; j++)
+							((graph500Generator *) g_generators_list[g_trace_2_gen_map[0][j][i]])->setState(
+									GraphCNState::LEVELSTART);
+						graph_model_ended = false;
+					}
+				}
+			}
 		}
 	} else { //  TRACE TRAFFIC
 		g_warmup_cycles = 0;
@@ -1038,7 +1348,6 @@ void action() {
 			}
 
 			if (normal) {
-				print_cycle = g_cycle % 5000;
 				for (i = 0; i < g_event_deadlock.size(); i++) {
 					for (j = 0; j < g_event_deadlock[i].size(); j++) {
 						if (g_event_deadlock[i][j] > 2000000) {
@@ -1086,14 +1395,13 @@ void action() {
 
 				/* Determine if trace instance has ended, checking every generator
 				 * associated with it. If trace has finished, update end status
-				 * and reload trace. If all traces have finished, stop simulation.
-				 *  */
+				 * and reload trace. If all traces have finished, stop simulation. */
 				go_on = false;
 				for (i = 0; i < g_num_traces; i++) {
 					for (j = 0; j < g_trace_instances[i]; j++) {
 						trace_ended = true;
 						for (int k = 0; k < g_trace_nodes[i]; k++) {
-							assert(g_trace_2_gen_map[i][k][j] < g_number_generators); // Sanity check: number of trace nodes has to be below number of available generators
+							assert(g_trace_2_gen_map[i][k][j] < g_number_generators); /* Sanity check: number of trace nodes has to be below number of available generators */
 							if (!g_generators_list[g_trace_2_gen_map[i][k][j]]->isGenerationEnded()) {
 								trace_ended = false;
 								break;
@@ -1118,7 +1426,7 @@ void action() {
 				/* All trace instances have finished once or more times: simulation must be ended at this point */
 				go_on = trace_ended ? false : true;
 
-				if (print_cycle == 0) {
+				if (g_cycle % g_print_cycles == 0) {
 					cout << "cycle:" << g_cycle << "   Messages sent:" << g_tx_flit_counter << "   Messages received:"
 							<< g_rx_flit_counter << endl;
 				}
@@ -1136,10 +1444,16 @@ void action() {
 }
 
 void writeOutput() {
-
 	float IQO[g_channels], GRQO[g_channels], LRQO[g_channels], GTQO[g_channels], LTQO[g_channels], GQO[g_channels],
-			LQO[g_channels];
+			LQO[g_channels], OQO = 0;
 	int i;
+
+	/* Open output file */
+	g_output_file.open(g_output_file_name, ios::out);
+	if (!g_output_file) {
+		cerr << "Can't open the output file" << g_output_file_name << endl;
+		exit(-1);
+	}
 
 	for (int vc = 0; vc < g_channels; vc++) {
 		LQO[vc] = 0;
@@ -1150,6 +1464,25 @@ void writeOutput() {
 		LTQO[vc] = 0;
 		GTQO[vc] = 0;
 	}
+
+	if (g_reactive_traffic) {
+		g_injection_probability *= 2;
+		for (int i = 0; i < g_number_generators; i++) {
+			g_generators_list[i]->sum_injection_probability *= 2;
+		}
+		switch (g_traffic) {
+			case UN:
+				g_traffic = UN_RCTV;
+				break;
+			case ADV_RANDOM_NODE:
+				g_traffic = ADV_RANDOM_NODE_RCTV;
+				break;
+			case BURSTY_UN:
+				g_traffic = BURSTY_UN_RCTV;
+				break;
+		}
+	}
+
 	g_output_file << "PARAMETERS" << endl;
 	g_output_file << "Total Number Of Cycles: " << g_cycle << endl;
 	g_output_file << "Max Cycles: " << g_max_cycles << endl;
@@ -1166,21 +1499,83 @@ void writeOutput() {
 			g_output_file << "Xbar Delay: " << g_xbar_delay << endl;
 			g_output_file << "Out Queue Length: " << g_out_queue_length << endl;
 			g_output_file << "Internal SpeedUp: " << g_internal_speedup << endl;
+			g_output_file << "Number Segregated Traffic Flows: " << g_segregated_flows << endl;
 			break;
 	}
 
+	switch (g_input_arbiter_type) {
+		case LRS:
+			g_output_file << "InputArbiter: LRS" << endl;
+			break;
+		case PrioLRS:
+			g_output_file << "InputArbiter: PrioLRS (priority of transit over injection)" << endl;
+			break;
+		case RR:
+			g_output_file << "InputArbiter: RoundRobin" << endl;
+			break;
+		case PrioRR:
+			g_output_file << "InputArbiter: PrioRoundRobin (priority of transit over injection)" << endl;
+			break;
+		case AGE:
+			g_output_file << "InputArbiter: AgeArbiter" << endl;
+			break;
+		case PrioAGE:
+			g_output_file << "InputArbiter: PrioAgeArbiter (priority of transit over injection)" << endl;
+			break;
+	}
+	switch (g_output_arbiter_type) {
+		case LRS:
+			g_output_file << "OutputArbiter: LRS" << endl;
+			break;
+		case PrioLRS:
+			g_output_file << "OutputArbiter: PrioLRS" << endl;
+			break;
+		case RR:
+			g_output_file << "OutputArbiter: RoundRobin" << endl;
+			break;
+		case PrioRR:
+			g_output_file << "OutputArbiter: PrioRoundRobin" << endl;
+			break;
+		case AGE:
+			g_output_file << "OutputArbiter: AgeArbiter" << endl;
+			break;
+		case PrioAGE:
+			g_output_file << "OutputArbiter: PrioAgeArbiter" << endl;
+			break;
+	}
 	g_output_file << "Arbiter Iterations: " << g_allocator_iterations << endl;
-	g_output_file << "Transit Priority: " << g_transit_priority << endl;
 	g_output_file << "Injection Delay: " << g_injection_delay << endl;
 	g_output_file << "Local Link Delay: " << g_local_link_transmission_delay << endl;
 	g_output_file << "Global Link Delay: " << g_global_link_transmission_delay << endl;
-	g_output_file << "Packet Size (in phits): " << g_packet_size << endl;
-	g_output_file << "Flit Size (in phits): " << g_flit_size << endl;
-	g_output_file << "Packet Size (in Flits): " << g_flits_per_packet << endl;
+	g_output_file << "Packet Size: " << g_packet_size << " phits" << endl;
+	g_output_file << "Flit Size: " << g_flit_size << " phits" << endl;
+	g_output_file << "Packet Flit Size: " << g_flits_per_packet << " flits" << endl;
 	g_output_file << "Generator Queue Length: " << g_injection_queue_length << endl;
-	g_output_file << "Local Queue Length: " << g_local_queue_length << " (phits per vc)" << endl;
-	g_output_file << "Global Queue Length: " << g_global_queue_length << " (phits per vc)" << endl;
+	switch (g_buffer_type) {
+		case SEPARATED:
+			g_output_file << "Buffer: SEPARATED" << endl;
+			g_output_file << "Local Queue Length: " << g_local_queue_length << " (phits per vc)" << endl;
+			g_output_file << "Global Queue Length: " << g_global_queue_length << " (phits per vc)" << endl;
+			g_output_file << "Total Local Buffer: " << g_local_queue_length * g_local_link_channels
+					<< " (phits per port)" << endl;
+			g_output_file << "Total Global Buffer: " << g_global_queue_length * g_global_link_channels
+					<< " (phits per port)" << endl;
+			break;
+		case DYNAMIC:
+			g_output_file << "Buffer: DYNAMIC" << endl;
+			g_output_file << "Local Queue Length: " << g_local_queue_length << " (phits per port)" << endl;
+			g_output_file << "Global Queue Length: " << g_global_queue_length << " (phits per port)" << endl;
+			g_output_file << "Reserved Local Queue: " << g_local_queue_reserved << " (pkts) " << endl;
+			g_output_file << "Reserved Global Queue: " << g_global_queue_reserved << " (pkts) " << endl;
+			g_output_file << "Total Local Buffer: " << g_local_queue_length << " (phits per port)" << endl;
+			g_output_file << "Total Global Buffer: " << g_global_queue_length << " (phits per port)" << endl;
+			break;
+		default:
+			assert(0);
+			break;
+	}
 	g_output_file << "VCs: " << g_channels << endl;
+	g_output_file << "Injection VCs: " << g_injection_channels << endl;
 	g_output_file << "Local Link VCs: " << g_local_link_channels << endl;
 	g_output_file << "Global Link VCs: " << g_global_link_channels << endl;
 	g_output_file << "Seed: " << g_seed << endl;
@@ -1189,6 +1584,7 @@ void writeOutput() {
 	g_output_file << "Hops Histogram Max Hops: " << g_hops_histogram_maxHops << endl;
 	if (g_local_arbiter_speedup > 0) g_output_file << "Input Speedup: " << g_local_arbiter_speedup << endl;
 	if (g_issue_parallel_reqs) g_output_file << "Parallel Req Issuing: 1" << endl;
+	if (g_cos_levels > 1) g_output_file << "CoS Levels: " << g_cos_levels << endl;
 
 	//Traffic pattern employed
 	g_output_file << "Injection Probability: " << g_injection_probability << endl;
@@ -1218,24 +1614,25 @@ void writeOutput() {
 				g_output_file << "All2All Random" << endl;
 			else
 				g_output_file << "All2All Naive" << endl;
-			g_output_file << "All2All Length (packets): " << (g_number_generators - 1) * g_phases << endl;
-			g_output_file << "All2All Length (flits): " << (g_number_generators - 1) * g_phases * g_flits_per_packet
+			g_output_file << "All2All Length: " << (g_number_generators - 1) * g_phases << " packets" << endl;
+			g_output_file << "All2All Length: " << (g_number_generators - 1) * g_phases * g_flits_per_packet << " flits"
 					<< endl;
 			g_output_file << "All2All Phases: " << g_phases << endl;
 			g_output_file << "All2All End Cycle: " << g_cycle << endl;
-			assert(g_cycle < g_max_cycles);	// If assert fails, it means simulation was unable to complete phase
+			assert(g_cycle < g_max_cycles); // If assert fails, it means simulation was unable to complete phase
 			break;
 		case MIX:
 			g_output_file << "Traffic: MIX" << endl;
-			g_output_file << "Adversarial Traffic Distance: " << g_adv_traffic_local_distance << endl;
+			g_output_file << "Adversarial Traffic Distance: " << g_adv_traffic_distance << endl;
+			g_output_file << "Adversarial Local Traffic Distance: " << g_adv_traffic_local_distance << endl;
 			g_output_file << "Random Traffic Percent: " << g_phase_traffic_percent[0] << endl;
 			g_output_file << "Adv Local Traffic Percent: " << g_phase_traffic_percent[1] << endl;
 			g_output_file << "Adv Global Traffic Percent: " << g_phase_traffic_percent[2] << endl;
 			break;
 		case SINGLE_BURST:
 			g_output_file << "Traffic: SINGLE_BURST" << endl;
-			g_output_file << "Burst Length (packets): " << (g_single_burst_length / g_flits_per_packet) << endl;
-			g_output_file << "Burst Length (flits): " << g_single_burst_length << endl;
+			g_output_file << "Burst Length: " << (g_single_burst_length / g_flits_per_packet) << " packets" << endl;
+			g_output_file << "Burst Length: " << g_single_burst_length << " flits" << endl;
 			for (i = 0; i < 3; i++) {
 				switch (g_phase_traffic_type[i]) {
 					case UN:
@@ -1256,7 +1653,7 @@ void writeOutput() {
 				g_output_file << "Type " << i << " Percent: " << g_phase_traffic_percent[i] << endl;
 			}
 			g_output_file << "Burst End Cycle: " << g_cycle << endl;
-			assert(g_cycle < g_max_cycles);	// If assert fails, it means simulation was unable to complete burst delivery
+			assert(g_cycle < g_max_cycles); // If assert fails, it means simulation was unable to complete burst delivery
 			break;
 		case TRANSIENT:
 			g_output_file << "Traffic: TRANSIENT" << endl;
@@ -1287,8 +1684,75 @@ void writeOutput() {
 				}
 			}
 			break;
+		case UN_RCTV:
+			g_output_file << "Traffic: UN_RCTV" << endl;
+			g_output_file << "Max Petitions On Flight: " << g_max_petitions_on_flight << endl;
+			break;
+		case ADV_RANDOM_NODE_RCTV:
+			g_output_file << "Traffic: ADV_RANDOM_NODE_RCTV" << endl;
+			g_output_file << "Adversarial Traffic Distance: " << g_adv_traffic_distance << endl;
+			g_output_file << "Max Petitions On Flight: " << g_max_petitions_on_flight << endl;
+			break;
+		case BURSTY_UN_RCTV:
+			g_output_file << "Traffic: BURSTY_UN_RCTV" << endl;
+			g_output_file << "Avg burst length: " << g_bursty_avg_length << endl;
+			g_output_file << "Effective avg burst length: "
+					<< (double) g_injected_packet_counter / g_injected_bursts_counter << endl;
+			g_output_file << "Max Petitions On Flight: " << g_max_petitions_on_flight << endl;
+			break;
+		case GRAPH500:
+			g_output_file << "Traffic: GRAPH500" << endl;
+			g_output_file << "Coalescing Size: " << g_graph_coalescing_size << endl;
+			g_output_file << "Query Time: " << g_graph_query_time << endl;
+			if (g_graph_nodes_cap_mod.size() > 0) {
+				g_output_file << "Nodes Capabilities Modified: ";
+				for (int i = 0; i < g_graph_nodes_cap_mod.size(); i++)
+					g_output_file << g_graph_nodes_cap_mod[i] << " ";
+				g_output_file << endl;
+				g_output_file << "Capabilities Modified Factor: " << g_graph_cap_mod_factor << endl;
+				g_output_file << "Injection Probability Modified: "
+						<< g_injection_probability * (g_graph_cap_mod_factor / 100.0) << endl;
+				g_output_file << "Query Time Modified: " << g_graph_query_time / (g_graph_cap_mod_factor / 100.0)
+						<< endl;
+			}
+			g_output_file << "Scale: " << g_graph_scale << endl;
+			g_output_file << "Edgefactor: " << g_graph_edgefactor << endl;
+			g_output_file << "Root Node: " << g_graph_root_node[0];
+			for (int i = 1; i < g_trace_instances[0]; i++)
+				g_output_file << ", " << g_graph_root_node[i];
+			g_output_file << endl;
+			g_output_file << "Root Degree: " << g_graph_root_degree[0];
+			for (int i = 1; i < g_trace_instances[0]; i++)
+				g_output_file << ", " << g_graph_root_degree[i];
+			g_output_file << endl;
+			g_output_file << "Parallel Instances: " << g_trace_instances[0] << endl;
+			g_output_file << "Processes: " << g_trace_nodes[0] << endl;
+			g_output_file << "P2P Queries sent: "
+					<< pow(2, g_graph_scale + 1) * g_graph_edgefactor * ((g_trace_nodes[0] - 1.0) / g_trace_nodes[0])
+							- g_graph_queries_remain[0] << " ("
+					<< 100
+							* (1
+									- g_graph_queries_remain[0]
+											/ (pow(2, g_graph_scale + 1) * g_graph_edgefactor * (g_trace_nodes[0] - 1.0)
+													/ g_trace_nodes[0])) << "%)";
+			for (int i = 1; i < g_trace_instances[0]; i++)
+				g_output_file << ", "
+						<< pow(2, g_graph_scale + 1) * g_graph_edgefactor
+								* ((g_trace_nodes[0] - 1.0) / g_trace_nodes[0]) - g_graph_queries_remain[i] << " ("
+						<< 100
+								* (1
+										- g_graph_queries_remain[i]
+												/ (pow(2, g_graph_scale + 1) * g_graph_edgefactor
+														* (g_trace_nodes[0] - 1.0) / g_trace_nodes[0])) << "%)";
+			g_output_file << endl;
+			g_output_file << "P2P Messages sent: " << g_graph_p2pmess << endl;
+			g_output_file << "Levels: " << g_graph_tree_level[0] + 1;
+			for (int i = 1; i < g_trace_instances[0]; i++)
+				g_output_file << ", " << g_graph_tree_level[i];
+			g_output_file << endl;
+			break;
 		default:
-			g_output_file << "Traffic: UNKNOWN!!!!" << endl;
+			g_output_file << "Traffic: UNKNOWN!!!! (" << g_traffic << ")" << endl;
 	}
 	g_output_file << endl;
 
@@ -1346,18 +1810,17 @@ void writeOutput() {
 			break;
 		case OBL:
 			g_output_file << "Routing: OBL" << endl;
+			g_output_file << "Reset VAL node: " << g_reset_val << endl;
 			break;
 		case SRC_ADP:
 			g_output_file << "Routing: SRC_ADP" << endl;
+			g_output_file << "Reset VAL node: " << g_reset_val << endl;
 			g_output_file << "Piggybacking Coef: " << g_piggyback_coef << endl;
 			g_output_file << "UGAL Local Threshold: " << g_ugal_local_threshold << endl;
 			g_output_file << "UGAL Global Threshold: " << g_ugal_global_threshold << endl;
 			break;
 		case PAR:
 			g_output_file << "Routing: PAR" << endl;
-			g_output_file << "Local Threshold Percent: " << g_percent_local_threshold << endl;
-			g_output_file << "Global Threshold Percent: " << g_percent_global_threshold << endl;
-			g_output_file << "Threshold Min: " << g_th_min << endl;
 			break;
 		case UGAL:
 			g_output_file << "Routing: UGAL" << endl;
@@ -1394,28 +1857,73 @@ void writeOutput() {
 			break;
 	}
 
-	switch (g_global_misrouting) {
-		case CRG:
-			g_output_file << "Global Misrouting: CRG" << endl;
+	switch (g_vc_usage) {
+		case BASE:
+			g_output_file << "VC Usage: BASE" << endl;
 			break;
-		case CRG_L:
-			g_output_file << "Global Misrouting: CRG_L" << endl;
+		case FLEXIBLE:
+			g_output_file << "VC Usage: FLEXIBLE" << endl;
+			switch (g_vc_alloc) {
+				case HIGHEST_VC:
+					g_output_file << "VC Allocation: HIGHEST_VC" << endl;
+					break;
+				case LOWEST_VC:
+					g_output_file << "VC Allocation: LOWEST_VC" << endl;
+					break;
+				case LOWEST_OCCUPANCY:
+					g_output_file << "VC Allocation: CONGESTION_BASED" << endl;
+					break;
+				case RANDOM_VC:
+					g_output_file << "VC Allocation: RANDOM" << endl;
+					break;
+			}
 			break;
-		case RRG:
-			g_output_file << "Global Misrouting: RRG" << endl;
-			break;
-		case RRG_L:
-			g_output_file << "Global Misrouting: RRG_L" << endl;
-			break;
-		case MM:
-			g_output_file << "Global Misrouting: MM" << endl;
-			break;
-		case MM_L:
-			g_output_file << "Global Misrouting: MM_L" << endl;
-			break;
-		default:
-			g_output_file << "Global Misrouting: Unknown (" << g_global_misrouting << ")" << endl;
-			break;
+	}
+
+	switch (g_routing) {
+		case OBL:
+		case OFAR:
+		case OLM:
+		case PAR:
+		case RLM:
+		case SRC_ADP:
+			switch (g_global_misrouting) {
+				case CRG:
+					g_output_file << "Global Misrouting: CRG" << endl;
+					break;
+				case CRG_L:
+					g_output_file << "Global Misrouting: CRG_L" << endl;
+					break;
+				case RRG:
+					g_output_file << "Global Misrouting: RRG" << endl;
+					break;
+				case RRG_L:
+					g_output_file << "Global Misrouting: RRG_L" << endl;
+					break;
+				case MM:
+					g_output_file << "Global Misrouting: MM" << endl;
+					break;
+				case MM_L:
+					g_output_file << "Global Misrouting: MM_L" << endl;
+					break;
+				default:
+					g_output_file << "Global Misrouting: Unknown (" << g_global_misrouting << ")" << endl;
+					break;
+			}
+			switch (g_congestion_detection) {
+				case PER_PORT:
+					g_output_file << "Congestion Detection: PER_PORT" << endl;
+					break;
+				case PER_VC:
+					g_output_file << "Congestion Detection: PER_VC" << endl;
+					break;
+				case PER_PORT_MIN:
+					g_output_file << "Congestion Detection: PER_PORT_MIN" << endl;
+					break;
+				case PER_VC_MIN:
+					g_output_file << "Congestion Detection: PER_VC_MIN" << endl;
+					break;
+			}
 	}
 
 	switch (g_misrouting_trigger) {
@@ -1430,6 +1938,8 @@ void writeOutput() {
 			break;
 		case HYBRID:
 			g_output_file << "Misrouting Trigger: HYBRID" << endl;
+			g_output_file << "Local Threshold Percent: " << g_percent_local_threshold << endl;
+			g_output_file << "Global Threshold Percent: " << g_percent_global_threshold << endl;
 			g_output_file << "Congestion Misrouting Restriction: " << g_vc_misrouting_congested_restriction << endl;
 			g_output_file << "Restriction Coef Percent: " << g_vc_misrouting_congested_restriction_coef_percent << endl;
 			g_output_file << "Restriction Threshold: " << g_vc_misrouting_congested_restriction_th << endl;
@@ -1444,6 +1954,8 @@ void writeOutput() {
 		case CA:
 			g_output_file << "Misrouting Trigger: CA" << endl;
 			g_output_file << "Contention Threshold: " << g_contention_aware_th << endl;
+			if (g_contention_aware_local_th >= 0)
+				g_output_file << "Contention Local Threshold: " << g_contention_aware_local_th << endl;
 			g_output_file << "Increase Contention At Header: " << g_increaseContentionAtHeader << endl;
 			break;
 		case WEIGTHED_CA:
@@ -1468,6 +1980,8 @@ void writeOutput() {
 			g_output_file << "Contention Threshold: " << g_contention_aware_th << endl;
 			g_output_file << "Contention Global Threshold: " << g_contention_aware_global_th << endl;
 			g_output_file << "Increase Contention At Header: " << g_increaseContentionAtHeader << endl;
+			g_output_file << "Local Threshold Percent: " << g_percent_local_threshold << endl;
+			g_output_file << "Global Threshold Percent: " << g_percent_global_threshold << endl;
 			g_output_file << "Congestion Misrouting Restriction: " << g_vc_misrouting_congested_restriction << endl;
 			g_output_file << "Restriction Coef Percent: " << g_vc_misrouting_congested_restriction_coef_percent << endl;
 			g_output_file << "Restriction Threshold: " << g_vc_misrouting_congested_restriction_th << endl;
@@ -1488,6 +2002,13 @@ void writeOutput() {
 	long receivedFlitCount = g_rx_flit_counter - g_rx_warmup_flit_counter;
 	long receivedPacketCount = g_rx_packet_counter - g_rx_warmup_packet_counter;
 	g_output_file << "Packets Received: " << receivedPacketCount << endl;
+	if (g_reactive_traffic)
+		g_output_file << "Responses Received: " << (g_response_counter - g_response_warmup_counter) << endl;
+	g_output_file << "Non Minimally Routed Packets Received: " << (g_nonminimal_counter - g_nonminimal_warmup_counter)
+			<< endl;
+	g_output_file << "InjectionMisrouted Packets Received: " << (g_nonminimal_inj - g_nonminimal_warmup_inj) << endl;
+	g_output_file << "SrcGroupMisrouted Packets Received: " << (g_nonminimal_src - g_nonminimal_warmup_src) << endl;
+	g_output_file << "IntGroupMisrouted Packets Received: " << (g_nonminimal_int - g_nonminimal_warmup_int) << endl;
 	for (i = 0; i < g_allocator_iterations; i++) {
 		g_output_file << "Flits Misrouted Iter " << i << ": "
 				<< (g_local_misrouted_flit_counter[i] + g_global_misrouted_flit_counter[i]) << " ("
@@ -1510,6 +2031,26 @@ void writeOutput() {
 	g_output_file << "Accepted Load: "
 			<< (float) 1.0 * receivedFlitCount * g_flit_size / (1.0 * g_number_generators * (g_cycle - g_warmup_cycles))
 			<< " phits/(node·cycle)" << endl;
+	if (g_reactive_traffic) {
+		g_output_file << "Petition Accepted Load: "
+				<< (float) 1.0 * (receivedFlitCount - g_response_counter + g_response_warmup_counter) * g_flit_size
+						/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
+		g_output_file << "Response Accepted Load: "
+				<< (float) 1.0 * (g_response_counter - g_response_warmup_counter) * g_flit_size
+						/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
+	}
+	g_output_file << "NonMinimal Accepted Load: "
+			<< (float) 1.0 * (g_nonminimal_counter - g_nonminimal_warmup_counter) * g_flit_size
+					/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
+	g_output_file << "InjectionMisrouted Accepted Load: "
+			<< (float) 1.0 * (g_nonminimal_inj - g_nonminimal_warmup_inj) * g_flit_size
+					/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
+	g_output_file << "SrcGroupMisrouted Accepted Load: "
+			<< (float) 1.0 * (g_nonminimal_src - g_nonminimal_warmup_src) * g_flit_size
+					/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
+	g_output_file << "IntGroupMisrouted Accepted Load: "
+			<< (float) 1.0 * (g_nonminimal_int - g_nonminimal_warmup_int) * g_flit_size
+					/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
 	g_output_file << "Cycles: " << g_cycle << " (warmup: " << g_warmup_cycles << ")" << endl;
 	g_output_file << "Total Hops: " << g_total_hop_counter << endl;
 	g_output_file << "Local Hops: " << g_local_hop_counter << endl;
@@ -1615,6 +2156,8 @@ void writeOutput() {
 			<< ((g_flit_latency - g_injection_queue_latency) - (g_warmup_flit_latency - g_warmup_injection_latency))
 					/ receivedFlitCount << endl;
 	g_output_file << "Average Base Latency: " << g_base_latency / receivedFlitCount << endl;
+	if (g_reactive_traffic)
+		g_output_file << "Average Response Latency: " << g_response_latency / g_response_counter << endl;
 
 	//Livelock control
 	g_output_file << "Max Hops: " << g_max_hops << endl;
@@ -1676,22 +2219,23 @@ void writeOutput() {
 	for (int i = 0; i < g_number_switches; i++) {
 		g_switches_list[i]->setQueueOccupancy();
 		for (int vc = 0; vc < g_injection_channels; vc++) {
-			IQO[vc] = IQO[vc] + g_switches_list[i]->injectionQueueOccupancy[vc];
+			IQO[vc] += g_switches_list[i]->injectionQueueOccupancy[vc];
 		}
 		for (int vc = 0; vc < g_channels; vc++) {
-			LQO[vc] = LQO[vc] + g_switches_list[i]->localQueueOccupancy[vc];
+			LQO[vc] += g_switches_list[i]->localQueueOccupancy[vc];
 			if (g_deadlock_avoidance == EMBEDDED_TREE)
-				LTQO[vc] = LTQO[vc] + g_switches_list[i]->localEscapeQueueOccupancy[vc];
-			else if (g_deadlock_avoidance == EMBEDDED_RING || g_deadlock_avoidance == RING)
-				LRQO[vc] = LRQO[vc] + g_switches_list[i]->localEscapeQueueOccupancy[vc];
+				LTQO[vc] += g_switches_list[i]->localEscapeQueueOccupancy[vc];
+			else if (g_deadlock_avoidance == EMBEDDED_RING || g_deadlock_avoidance == RING) LRQO[vc] +=
+					g_switches_list[i]->localEscapeQueueOccupancy[vc];
 		}
 		for (int vc = 0; vc < g_channels; vc++) {
-			GQO[vc] = GQO[vc] + g_switches_list[i]->globalQueueOccupancy[vc];
+			GQO[vc] += g_switches_list[i]->globalQueueOccupancy[vc];
 			if (g_deadlock_avoidance == EMBEDDED_TREE)
-				GTQO[vc] = GTQO[vc] + g_switches_list[i]->globalEscapeQueueOccupancy[vc];
-			else if (g_deadlock_avoidance == EMBEDDED_RING || g_deadlock_avoidance == RING)
-				GRQO[vc] = GRQO[vc] + g_switches_list[i]->globalEscapeQueueOccupancy[vc];
+				GTQO[vc] += g_switches_list[i]->globalEscapeQueueOccupancy[vc];
+			else if (g_deadlock_avoidance == EMBEDDED_RING || g_deadlock_avoidance == RING) GRQO[vc] +=
+					g_switches_list[i]->globalEscapeQueueOccupancy[vc];
 		}
+		OQO += g_switches_list[i]->outputQueueOccupancy;
 	}
 
 	for (int vc = 0; vc < g_channels; vc++) {
@@ -1700,15 +2244,28 @@ void writeOutput() {
 				<< IQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
 				<< ((float) 100.0 * IQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
 						/ g_injection_queue_length << "\%)" << endl;
-		g_output_file << "Local Queues Occupancy: "
-				<< LQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
-				<< ((float) 100.0 * LQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
-						/ g_local_queue_length << "\%)" << endl;
-		g_output_file << "Global Queues Occupancy: "
-				<< GQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
-				<< ((float) 100.0 * GQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
-						/ g_global_queue_length
-				<< "\%)" << endl;
+		switch (g_buffer_type) {
+			case SEPARATED:
+				g_output_file << "Local Queues Occupancy: "
+						<< LQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
+						<< ((float) 100.0 * LQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
+								/ g_local_queue_length << "\%)" << endl;
+				g_output_file << "Global Queues Occupancy: "
+						<< GQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
+						<< ((float) 100.0 * GQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
+								/ g_global_queue_length << "\%)" << endl;
+				break;
+			case DYNAMIC:
+				g_output_file << "Local Queues Occupancy: "
+						<< LQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
+						<< ((float) 100.0 * LQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
+								/ (g_local_queue_length / g_local_link_channels) << "\%)" << endl;
+				g_output_file << "Global Queues Occupancy: "
+						<< GQO[vc] / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
+						<< ((float) 100.0 * GQO[vc] / ((g_cycle - g_warmup_cycles) * g_number_switches))
+								/ (g_global_queue_length / g_global_link_channels) << "\%)" << endl;
+				break;
+		}
 
 		switch (g_deadlock_avoidance) {
 			case EMBEDDED_TREE:
@@ -1731,6 +2288,12 @@ void writeOutput() {
 		}
 	}
 	g_output_file << endl;
+	if (g_switch_type == IOQ_SW) {
+		g_output_file << "Consumption Output Queues Occupancy: "
+				<< OQO / ((1.0) * (g_cycle - g_warmup_cycles) * g_number_switches) << " ("
+				<< ((float) 100.0 * OQO / ((g_cycle - g_warmup_cycles) * g_number_switches)) / g_out_queue_length
+				<< "\%)" << endl << endl;
+	}
 	g_output_file << "Petitions Done: " << g_petitions << endl;
 	g_output_file << "Petitions Served: " << g_served_petitions << "(" << 100.0 * g_served_petitions / g_petitions
 			<< "%)" << endl;
@@ -1756,14 +2319,28 @@ void writeOutput() {
 
 	/* Group 0 and tree root group (if deadlock avoidance mechanism is an embedded tree)
 	 * latency statistics per switch. */
+	long long *g_group0_numFlits_aux = new long long[g_a_routers_per_group];
+	for (int a = 0; a < g_a_routers_per_group; a++) {
+		g_group0_numFlits_aux[a] = 0;
+		for (int p = 0; p < g_p_computing_nodes_per_router; p++)
+			g_group0_numFlits_aux[a] += g_group0_numFlits[a][p][0] + g_group0_numFlits[a][p][1];
+	}
+
 	g_output_file << "GROUP 0" << endl;
 	for (int i = 0; i < g_a_routers_per_group; i++) {
-		g_output_file << "Group0 SW" << i << " Flits: " << g_group0_numFlits[i] << endl;
-		if (g_group0_numFlits[i] > 0) {
+		g_output_file << "Group0 SW" << i << " Flits: " << g_group0_numFlits_aux[i] << endl;
+		if (g_group0_numFlits_aux[i] > 0) {
 			g_output_file << "Group0 SW" << i << " AvgTotalLatency: "
-					<< (g_group0_totalLatency[i]) / ((double) (g_group0_numFlits[i])) << endl;
+					<< (g_group0_totalLatency[i]) / ((double) (g_group0_numFlits_aux[i])) << endl;
 		}
+		for (int p = 0; p < g_p_computing_nodes_per_router; p++)
+			if (g_group0_numFlits[i][p][0] > 0 || g_group0_numFlits[i][p][1] > 0) {
+				g_output_file << "Group0 SW" << i << " Node" << p << " MIN: " << g_group0_numFlits[i][p][0] << endl;
+				g_output_file << "Group0 SW" << i << " Node" << p << " NON-MIN: " << g_group0_numFlits[i][p][1] << endl;
+			}
+
 	}
+	delete[] g_group0_numFlits_aux;
 	if (g_deadlock_avoidance == EMBEDDED_TREE) {
 		g_output_file << " " << endl;
 		g_output_file << "TREE ROOT NODE: " << g_tree_root_node << endl;
@@ -1779,7 +2356,7 @@ void writeOutput() {
 	}
 
 	g_output_file << endl;
-
+	g_output_file.close();
 }
 
 void freeMemory() {
@@ -1809,6 +2386,11 @@ void freeMemory() {
 	delete[] g_phase_traffic_type;
 	delete[] g_phase_traffic_percent;
 
+	for (i = 0; i < g_a_routers_per_group; i++) {
+		for (int p = 0; p < g_p_computing_nodes_per_router; p++)
+			delete[] g_group0_numFlits[i][p];
+		delete[] g_group0_numFlits[i];
+	}
 	delete[] g_group0_numFlits;
 	delete[] g_group0_totalLatency;
 	delete[] g_groupRoot_numFlits;
@@ -1819,6 +2401,7 @@ void freeMemory() {
 	g_latency_histogram_other_global_misroute.clear();
 
 	delete[] g_hops_histogram;
+	delete[] g_output_file_name;
 
 	cout << "Freed memory" << endl;
 }
@@ -1937,15 +2520,45 @@ void writeHopsHistogram(char * output_name) {
 	outputFile.close();
 }
 
+void writeGeneratorsInjectionProbability(char * output_name) {
+	string file_name(output_name);
+	ofstream outputFile;
+
+	file_name.append(".generatorsInjectionProbability");
+	outputFile.open(file_name.c_str(), ios::out);
+	if (!outputFile) {
+		cerr << "Can't open the generators injection probability output file" << endl;
+		exit(-1);
+	}
+
+	outputFile << "generator\tinjectionProbability" << endl;
+
+	for (int i = 0; i < g_number_generators; i++) {
+		float averageInjectionProbability = g_generators_list[i]->sum_injection_probability / g_cycle;
+		if (averageInjectionProbability != g_injection_probability)
+			outputFile << i << "\t" << averageInjectionProbability << endl;
+	}
+	outputFile.close();
+}
+
 void readTraceMap(const char * tracemap_filename) {
 	int generator, node, trace, instances;
-	vector < string > values;
+	vector<string> values;
 	ConfigFile map;
 
 	/* Open configuration file */
 	if (map.LoadConfig(tracemap_filename) < 0) {
 		cerr << "Can't read the trace_map file" << endl;
 		exit(-1);
+	}
+
+	/* Initiate trace2gen map */
+	for (int i = 0; i < g_num_traces; i++) {
+		vector<vector<int> > aux; // Aux vector
+		for (int j = 0; j < g_trace_nodes[i]; j++) {
+			aux.push_back(vector<int>()); // Add an empty vector (will be later increased by every gen mapped to the trace node)
+		}
+		g_trace_2_gen_map.push_back(aux);
 	}
 
 	/* Load trace layout into a map */
@@ -1982,14 +2595,25 @@ void readTraceMap(const char * tracemap_filename) {
  * reuse it for future simulations).
  */
 void buildTraceMap() {
-	int i, trace, instance, node, generator;
+	int i, j, trace, instance, node, generator;
 	string fileName(g_output_file_name);
 	ofstream traceMapFile;
+	assert(g_num_traces > 0);
+	assert(g_trace_nodes.size() == g_num_traces && g_trace_instances.size() == g_num_traces);
 
 	/* Open trace map file and write section header */
 	fileName.append(".traceMap");
 	traceMapFile.open(fileName.c_str(), ios::out);
 	traceMapFile << "[TRACE_MAP]" << endl;
+
+	/* Initiate trace2gen map */
+	for (i = 0; i < g_num_traces; i++) {
+		vector<vector<int> > aux; // Aux vector
+		for (j = 0; j < g_trace_nodes[i]; j++) {
+			aux.push_back(vector<int>()); // Add an empty vector (will be later increased by every gen mapped to the trace node)
+		}
+		g_trace_2_gen_map.push_back(aux);
+	}
 
 	/* Associate every trace node with a generator */
 	for (trace = 0; trace < g_num_traces; trace++) {
@@ -2015,6 +2639,11 @@ void buildTraceMap() {
 						}
 						generator += instance;
 						break;
+					case RANDOM:
+						do
+							generator = rand() % g_number_generators;
+						while (g_gen_2_trace_map.count(generator) == 1);
+						break;
 					default:
 						assert(0);
 						break;
@@ -2039,11 +2668,29 @@ void buildTraceMap() {
 
 #define READ_ENUM(VAR, VALUE) if (strcmp(VAR, #VALUE) == 0) *var = VALUE;
 
+void readBufferType(const char * buffer_type, BufferType * var) {
+	READ_ENUM(buffer_type, SEPARATED) else
+	READ_ENUM(buffer_type, DYNAMIC) else {
+		cerr << "ERROR: UNRECOGNISED BUFFER TYPE! " << endl;
+	}
+}
+
 void readSwitchType(const char * switch_type, SwitchType * var) {
 	READ_ENUM(switch_type, BASE_SW) else
 	READ_ENUM(switch_type, IOQ_SW) else {
 		cerr << "ERROR: UNRECOGNISED SWITCH TYPE!" << endl;
 		exit(0);
+	}
+}
+
+void readArbiterType(const char * arbiter_type, ArbiterType * var) {
+	READ_ENUM(arbiter_type, LRS) else
+	READ_ENUM(arbiter_type, PrioLRS) else
+	READ_ENUM(arbiter_type, RR) else
+	READ_ENUM(arbiter_type, PrioRR) else
+	READ_ENUM(arbiter_type, AGE) else
+	READ_ENUM(arbiter_type, PrioAGE) else {
+		cerr << "ERROR: UNRECOGNISED ARBITER TYPE! " << arbiter_type << endl;
 	}
 }
 
@@ -2058,8 +2705,12 @@ void readTrafficPattern(const char * traffic_name, TrafficType * var) {
 	READ_ENUM(traffic_name, MIX) else
 	READ_ENUM(traffic_name, TRANSIENT) else
 	READ_ENUM(traffic_name, BURSTY_UN) else
-	READ_ENUM(traffic_name, TRACE) else {
-		cerr << "ERROR: UNRECOGNISED TRAFFIC TYPE!" << endl;
+	READ_ENUM(traffic_name, TRACE) else
+	READ_ENUM(traffic_name, UN_RCTV) else
+	READ_ENUM(traffic_name, ADV_RANDOM_NODE_RCTV) else
+	READ_ENUM(traffic_name, GRAPH500) else
+	READ_ENUM(traffic_name, BURSTY_UN_RCTV) else {
+		cerr << "ERROR: UNRECOGNISED TRAFFIC TYPE!" << traffic_name << endl;
 		exit(0);
 	}
 }
@@ -2121,7 +2772,17 @@ void readMisroutingTrigger(const char * d_a, MisroutingTrigger * var) {
 	}
 }
 
+void readCongestionDetection(const char * d_a, CongestionDetection * var) {
+	READ_ENUM(d_a, PER_PORT) else
+	READ_ENUM(d_a, PER_VC) else
+	READ_ENUM(d_a, PER_PORT_MIN) else
+	READ_ENUM(d_a, PER_VC_MIN) else {
+		cerr << "ERROR: UNRECOGNISED CONGESTION MANAGEMENT POLICY!: " << d_a << endl;
+	}
+}
+
 void readTraceDistribution(const char * d_a, TraceAssignation * var) {
+	READ_ENUM(d_a, RANDOM) else
 	READ_ENUM(d_a, CONSECUTIVE) else
 	READ_ENUM(d_a, INTERLEAVED) else {
 		cerr << "ERROR: UNRECOGNISED TRACE DISTRIBUTION!" << endl;
@@ -2129,3 +2790,28 @@ void readTraceDistribution(const char * d_a, TraceAssignation * var) {
 	}
 }
 
+void readVcUsage(const char * d_a, VcUsageType * var) {
+	READ_ENUM(d_a, BASE) else
+	READ_ENUM(d_a, FLEXIBLE) else {
+		cerr << "ERROR: UNRECOGNISED VC USAGE!" << endl;
+		exit(0);
+	}
+}
+
+void readVcAlloc(const char * d_a, VcAllocationMechanism * var) {
+	READ_ENUM(d_a, HIGHEST_VC) else
+	READ_ENUM(d_a, LOWEST_VC) else
+	READ_ENUM(d_a, LOWEST_OCCUPANCY) else
+	READ_ENUM(d_a, RANDOM_VC) else {
+		cerr << "ERROR: UNRECOGNISED VC ALLOCATION MECHANISM!" << endl;
+		exit(0);
+	}
+}
+
+void readVcInj(const char * d_a, VcInjectionPolicy * var) {
+	READ_ENUM(d_a, DEST) else
+	READ_ENUM(d_a, RAND) else {
+		cerr << "ERROR: UNRECOGNISED VC INJECTION POLICY!" << endl;
+		exit(0);
+	}
+}

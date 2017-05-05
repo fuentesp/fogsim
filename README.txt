@@ -1,6 +1,6 @@
 FOGSim, simulator for interconnection networks.
 http://fuentesp.github.io/fogsim/
-Copyright (C) 2015 University of Cantabria
+Copyright (C) 2017 University of Cantabria
 
 To compile FOGSim, it requires GNU make (version 4.7.2 preferred).
 Just typing 'make' in the shell prompt should do the trick.

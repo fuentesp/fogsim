@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -56,13 +56,30 @@ baseRouting::baseRouting(switchModule *switchM) {
 		case CGA:
 		case HYBRID:
 		case HYBRID_REMOTE:
-			globalLinkCongested = new bool[g_h_global_ports_per_router];
-			for (int i = 0; i < g_h_global_ports_per_router; i++) {
-				globalLinkCongested[i] = false;
+			globalLinkCongested = new bool**[g_channels];
+			for (int j = 0; j < g_channels; j++) {
+				globalLinkCongested[j] = new bool*[g_cos_levels];
+				for (int c = 0; c < g_cos_levels; c++) {
+					globalLinkCongested[j][c] = new bool[g_h_global_ports_per_router];
+					for (int i = 0; i < g_h_global_ports_per_router; i++) {
+						globalLinkCongested[j][c][i] = false;
+					}
+				}
 			}
 			break;
 		default:
 			break;
+	}
+
+	/* Set up the vc arrays; if reactive traffic is in use, it needs to
+	 * halve available vc resources to separate petitions from responses. */
+	char aux[] = { 'a', 'h', 'a', 'h', 'a' };
+	typeVc.insert(typeVc.begin(), aux, aux + 5);
+	int aux2[] = { 0, 0, 1, 1, 2 };
+	petitionVc.insert(petitionVc.begin(), aux2, aux2 + 5);
+	if (g_reactive_traffic) {
+		int aux3[] = { 3, 2, 4, 3, 5 };
+		responseVc.insert(responseVc.begin(), aux3, aux3 + 5);
 	}
 }
 
@@ -71,7 +88,17 @@ baseRouting::~baseRouting() {
 	delete[] neighPort;
 	delete[] tableSwOut;
 	delete[] tableGroupOut;
-	delete[] globalLinkCongested;
+	switch (g_misrouting_trigger) {
+		case CGA:
+		case HYBRID:
+		case HYBRID_REMOTE:
+			for (int i = 0; i < g_channels; i++)
+				delete[] globalLinkCongested[i];
+			delete[] globalLinkCongested;
+			break;
+		default:
+			break;
+	}
 	switch (g_deadlock_avoidance) {
 		case RING:
 		case EMBEDDED_RING:
@@ -90,7 +117,7 @@ baseRouting::~baseRouting() {
 }
 
 void baseRouting::setMinTables() {
-	int thisA, thisH, destP, destA, destH, destID, nextA, inPort, outPort, minPortCounter, offsetH, offsetHcmp, offsetA;
+	int thisA, thisH, destP, destA, destH, destID, nextA, outPort, minPortCounter, offsetH, offsetHcmp, offsetA;
 	thisA = switchM->aPos;
 	thisH = switchM->hPos;
 	minPortCounter = (g_deadlock_avoidance == RING) ? portCount - 2 : portCount;
@@ -117,7 +144,7 @@ void baseRouting::setMinTables() {
 			} else {
 				outPort = module(offsetH, g_h_global_ports_per_router) + g_global_router_links_offset;
 			}
-			assert(outPort < minPortCounter && inPort < minPortCounter); /* Sanity check: in/out port can't be higher than router ports range */
+			assert(outPort < minPortCounter); /* Sanity check: out port can't be higher than router ports range */
 			tableGroupOut[destH] = outPort;
 			continue;
 		} else
@@ -127,7 +154,7 @@ void baseRouting::setMinTables() {
 				offsetA = destA - thisA;
 				if (offsetA > 0) offsetA--;
 				outPort = thisA + offsetA + g_local_router_links_offset;
-				assert(outPort < minPortCounter && inPort < minPortCounter); /* Sanity check: in/out port can't be higher than router ports range */
+				assert(outPort < minPortCounter); /* Sanity check: out port can't be higher than router ports range */
 				tableSwOut[destA] = outPort;
 			} else
 				tableSwOut[destA] = -1;
@@ -476,7 +503,37 @@ bool baseRouting::misrouteCondition(flitModule * flit, int outPort, int outVC) {
 	/* Misrouting condition depends on the misrouting trigger
 	 * mechanism employed.
 	 */
-	int crd = switchM->getCredits(outPort, outVC);
+	if (g_misrouting_trigger == CGA || g_misrouting_trigger == HYBRID || g_misrouting_trigger == HYBRID_REMOTE) {
+		int auxVc, maxVc;
+		maxVc = outPort < g_global_router_links_offset ? maxVc = g_local_link_channels : maxVc = g_global_link_channels;
+
+		switch (g_congestion_detection) {
+			case PER_PORT:
+				q_min = 0;
+				for (auxVc = 0; auxVc < maxVc; auxVc++)
+					q_min += switchM->getCreditsOccupancy(outPort, flit->cos, auxVc) * 100.0
+							/ switchM->getMaxCredits(outPort, flit->cos, auxVc);
+				q_min /= maxVc;
+				break;
+			case PER_VC:
+				q_min = switchM->getCreditsOccupancy(outPort, flit->cos, outVC) * 100.0
+						/ switchM->getMaxCredits(outPort, flit->cos, outVC);
+				break;
+			case PER_PORT_MIN:
+				q_min = 0;
+				for (auxVc = 0; auxVc < maxVc; auxVc++)
+					q_min += switchM->getCreditsMinOccupancy(outPort, flit->cos, auxVc) * 100.0
+							/ switchM->getMaxCredits(outPort, flit->cos, auxVc);
+				q_min /= maxVc;
+				break;
+			case PER_VC_MIN:
+				q_min = switchM->getCreditsMinOccupancy(outPort, flit->cos, outVC) * 100.0
+						/ switchM->getMaxCredits(outPort, flit->cos, outVC);
+				break;
+		}
+	}
+
+	int crd = switchM->getCredits(outPort, flit->cos, outVC);
 	switch (g_misrouting_trigger) {
 		case FILTERED: /* Currently it is treated as contention trigger (with internal differences) */
 		case WEIGTHED_CA: /* For misrouting triggering purposes, it works like CA */
@@ -490,8 +547,7 @@ bool baseRouting::misrouteCondition(flitModule * flit, int outPort, int outVC) {
 			 * 		- Link has run out of credits OR
 			 * 		- Link under use
 			 */
-			q_min = switchM->getCreditsOccupancy(outPort, outVC) * 100.0 / switchM->getMaxCredits(outPort, outVC);
-			result = (q_min >= g_th_min) && ((crd < g_flit_size) || not (switchM->nextPortCanReceiveFlit(outPort)));
+			result = q_min >= g_th_min && (crd < g_flit_size || not switchM->nextPortCanReceiveFlit(outPort));
 			break;
 
 		case HYBRID:
@@ -500,9 +556,8 @@ bool baseRouting::misrouteCondition(flitModule * flit, int outPort, int outVC) {
 			 * 	-COMPULSARY min threshold is exceeded AND any of Congestion Aware conditions is true:
 			 * 		link in use, or link out of credits
 			 */
-			q_min = switchM->getCreditsOccupancy(outPort, outVC) * 100.0 / switchM->getMaxCredits(outPort, outVC);
 			result = switchM->m_ca_handler.isThereContention(outPort)
-					|| ((q_min >= g_th_min) && ((crd < g_flit_size) || not (switchM->nextPortCanReceiveFlit(outPort))));
+					|| (q_min >= g_th_min && (crd < g_flit_size || not switchM->nextPortCanReceiveFlit(outPort)));
 			break;
 
 		case CA_REMOTE:
@@ -520,10 +575,9 @@ bool baseRouting::misrouteCondition(flitModule * flit, int outPort, int outVC) {
 			 * (sending partial counters across routers within each group in that regard) or if link
 			 * is saturated.
 			 */
-			q_min = switchM->getCreditsOccupancy(outPort, outVC) * 100.0 / switchM->getMaxCredits(outPort, outVC);
 			result = switchM->m_ca_handler.isThereContention(outPort)
 					|| switchM->m_ca_handler.isThereGlobalContention(flit)
-					|| ((q_min >= g_th_min) && ((crd < g_flit_size) || not (switchM->nextPortCanReceiveFlit(outPort))));
+					|| (q_min >= g_th_min && (crd < g_flit_size || not switchM->nextPortCanReceiveFlit(outPort)));
 			break;
 
 		default:
@@ -542,23 +596,23 @@ bool baseRouting::misrouteCondition(flitModule * flit, int outPort, int outVC) {
 		switch (g_misrouting_trigger) {
 			case CGA:
 				if (outPort >= g_global_router_links_offset
-						&& outPort < g_global_router_links_offset + g_h_global_ports_per_router && outVC == 0) {
-					result = result && globalLinkCongested[outPort - g_global_router_links_offset];
+						&& outPort < g_global_router_links_offset + g_h_global_ports_per_router) {
+					result = result && globalLinkCongested[outVC][flit->cos][outPort - g_global_router_links_offset];
 				}
 				break;
 			case HYBRID:
 				if (outPort >= g_global_router_links_offset
-						&& outPort < g_global_router_links_offset + g_h_global_ports_per_router && outVC == 0
+						&& outPort < g_global_router_links_offset + g_h_global_ports_per_router
 						&& not switchM->m_ca_handler.isThereContention(outPort)) {
-					result = result && globalLinkCongested[outPort - g_global_router_links_offset];
+					result = result && globalLinkCongested[outVC][flit->cos][outPort - g_global_router_links_offset];
 				}
 				break;
 			case HYBRID_REMOTE:
 				if (outPort >= g_global_router_links_offset
-						&& outPort < g_global_router_links_offset + g_h_global_ports_per_router && outVC == 0
+						&& outPort < g_global_router_links_offset + g_h_global_ports_per_router
 						&& not (switchM->m_ca_handler.isThereContention(outPort)
 								|| switchM->m_ca_handler.isThereGlobalContention(flit))) {
-					result = result && globalLinkCongested[outPort - g_global_router_links_offset];
+					result = result && globalLinkCongested[outVC][flit->cos][outPort - g_global_router_links_offset];
 				}
 				break;
 			default:
@@ -570,33 +624,94 @@ bool baseRouting::misrouteCondition(flitModule * flit, int outPort, int outVC) {
 }
 
 /*
- * Updates the value of globalLinkCongested (only if vc = 0) for
+ * Updates the value of globalLinkCongested for
  * misrouting restriction applied under certain cases with CGA
  * or HYBRID misrouting triggers;
  */
 void baseRouting::updateCongestionStatusGlobalLinks() {
-	double qMean = 0.0;	//mean global queue occupancy
-	int port, channel = 0;
+	double qMean, qCur;
+	int port, cos, channel;
 	double threshold;
 
 	/* Global links are considered to be saturated if their occupancy exceeds a percentage
-	 * of the average of global queues in current switch, plus a minimum amount of flits. */
-	for (port = g_global_router_links_offset; port < g_global_router_links_offset + g_h_global_ports_per_router;
-			port++) {
-		qMean += switchM->getCreditsOccupancy(port, channel);
-	}
-	qMean = qMean / g_h_global_ports_per_router;
-	threshold = g_vc_misrouting_congested_restriction_coef_percent / 100.0 * qMean
-			+ g_vc_misrouting_congested_restriction_th * g_flit_size;
-
-	for (port = g_global_router_links_offset; port < g_global_router_links_offset + g_h_global_ports_per_router;
-			port++) {
-		globalLinkCongested[port - g_global_router_links_offset] = (switchM->getCreditsOccupancy(port, channel)
-				> threshold);
+	 * of the average of global queues in current switch, plus a minimum amount of flits.
+	 */
+	for (cos = 0; cos < g_cos_levels; cos++) {
+		switch (g_congestion_detection) {
+			case PER_PORT:
+				qMean = 0.0;
+				for (port = g_global_router_links_offset;
+						port < g_global_router_links_offset + g_h_global_ports_per_router; port++)
+					for (channel = 0; channel < g_global_link_channels; channel++)
+						qMean += switchM->getCreditsOccupancy(port, cos, channel);
+				qMean /= g_h_global_ports_per_router * g_global_link_channels;
+				threshold = g_vc_misrouting_congested_restriction_coef_percent / 100.0 * qMean
+						+ g_vc_misrouting_congested_restriction_th * g_flit_size;
+				for (port = g_global_router_links_offset;
+						port < g_global_router_links_offset + g_h_global_ports_per_router; port++) {
+					qCur = 0.0;
+					for (channel = 0; channel < g_global_link_channels; channel++)
+						qCur += switchM->getCreditsOccupancy(port, cos, channel);
+					qCur /= g_global_link_channels;
+					for (channel = 0; channel < g_global_link_channels; channel++)
+						globalLinkCongested[channel][cos][port - g_global_router_links_offset] = qCur > threshold;
+				}
+				break;
+			case PER_VC:
+				for (channel = 0; channel < g_global_link_channels; channel++) {
+					qMean = 0.0;
+					for (port = g_global_router_links_offset;
+							port < g_global_router_links_offset + g_h_global_ports_per_router; port++)
+						qMean += switchM->getCreditsOccupancy(port, cos, channel);
+					qMean /= g_h_global_ports_per_router;
+					threshold = g_vc_misrouting_congested_restriction_coef_percent / 100.0 * qMean
+							+ g_vc_misrouting_congested_restriction_th * g_flit_size;
+					for (port = g_global_router_links_offset;
+							port < g_global_router_links_offset + g_h_global_ports_per_router; port++)
+						globalLinkCongested[channel][cos][port - g_global_router_links_offset] =
+								switchM->getCreditsOccupancy(port, cos, channel) > threshold;
+				}
+				break;
+			case PER_PORT_MIN:
+				qMean = 0.0;
+				for (port = g_global_router_links_offset;
+						port < g_global_router_links_offset + g_h_global_ports_per_router; port++)
+					for (channel = 0; channel < g_global_link_channels; channel++)
+						qMean += switchM->getCreditsMinOccupancy(port, cos, channel);
+				qMean /= g_h_global_ports_per_router * g_global_link_channels;
+				threshold = g_vc_misrouting_congested_restriction_coef_percent / 100.0 * qMean
+						+ g_vc_misrouting_congested_restriction_th * g_flit_size;
+				for (port = g_global_router_links_offset;
+						port < g_global_router_links_offset + g_h_global_ports_per_router; port++) {
+					qCur = 0.0;
+					for (channel = 0; channel < g_global_link_channels; channel++)
+						qCur += switchM->getCreditsMinOccupancy(port, cos, channel);
+					qCur /= g_global_link_channels;
+					for (channel = 0; channel < g_global_link_channels; channel++)
+						globalLinkCongested[channel][cos][port - g_global_router_links_offset] = qCur > threshold;
+				}
+				break;
+			case PER_VC_MIN:
+				for (channel = 0; channel < g_global_link_channels; channel++) {
+					qMean = 0.0;
+					for (port = g_global_router_links_offset;
+							port < g_global_router_links_offset + g_h_global_ports_per_router; port++)
+						qMean += switchM->getCreditsMinOccupancy(port, cos, channel);
+					qMean = qMean / g_h_global_ports_per_router;
+					threshold = g_vc_misrouting_congested_restriction_coef_percent / 100.0 * qMean
+							+ g_vc_misrouting_congested_restriction_th * g_flit_size;
+					for (port = g_global_router_links_offset;
+							port < g_global_router_links_offset + g_h_global_ports_per_router; port++) {
+						globalLinkCongested[channel][cos][port - g_global_router_links_offset] =
+								switchM->getCreditsMinOccupancy(port, cos, channel) > threshold;
+					}
+				}
+				break;
+		}
 	}
 
 #if DEBUG
-	cout << "Cycle " << g_cycle << "--> SW " << this->switchM->label << "VC "<< channel<< " Global Ports qMEAN = " << qMean << " Threshold = "
+	cout << "Cycle " << g_cycle << "--> SW " << this->switchM->label << "VC " << channel << " Global Ports qMEAN = " << qMean << " Threshold = "
 	<< threshold << endl;
 #endif
 }
@@ -611,12 +726,43 @@ void baseRouting::updateCongestionStatusGlobalLinks() {
  */
 bool baseRouting::misrouteCandidate(flitModule * flit, int inPort, int inVC, int minOutPort, int minOutVC,
 		int &selectedPort, int &selectedVC, MisrouteType &misroute_type) {
-	int random, num_candidates = 0, *candidates_port = NULL, *candidates_VC = NULL;
+	int random, num_candidates = 0, *candidates_port = NULL, *candidates_VC = NULL, maxVc;
 	double q_min, th_non_min;
 	bool result = false;
 
 	assert(minOutPort == minOutputPort(flit->destId)); /* Sanity check: given output port must belong to min path */
-	q_min = switchM->getCreditsOccupancy(minOutPort, minOutVC) * 100.0 / switchM->getMaxCredits(minOutPort, minOutVC);
+	switch (g_congestion_detection) {
+		case PER_PORT:
+			if (minOutPort < g_global_router_links_offset)
+				maxVc = g_local_link_channels;
+			else
+				maxVc = g_global_link_channels;
+			q_min = 0;
+			for (int auxVc = 0; auxVc < maxVc; auxVc++)
+				q_min += switchM->getCreditsOccupancy(minOutPort, flit->cos, auxVc) * 100.0
+						/ switchM->getMaxCredits(minOutPort, flit->cos, auxVc);
+			q_min /= maxVc;
+			break;
+		case PER_VC:
+			q_min = switchM->getCreditsOccupancy(minOutPort, flit->cos, minOutVC) * 100.0
+					/ switchM->getMaxCredits(minOutPort, flit->cos, minOutVC);
+			break;
+		case PER_PORT_MIN:
+			if (minOutPort < g_global_router_links_offset)
+				maxVc = g_local_link_channels;
+			else
+				maxVc = g_global_link_channels;
+			q_min = 0;
+			for (int auxVc = 0; auxVc < maxVc; auxVc++)
+				q_min += switchM->getCreditsMinOccupancy(minOutPort, flit->cos, auxVc) * 100.0
+						/ switchM->getMaxCredits(minOutPort, flit->cos, auxVc);
+			q_min /= maxVc;
+			break;
+		case PER_VC_MIN:
+			q_min = switchM->getCreditsMinOccupancy(minOutPort, flit->cos, minOutVC) * 100.0
+					/ switchM->getMaxCredits(minOutPort, flit->cos, minOutVC);
+			break;
+	}
 
 	misroute_type = this->misrouteType(inPort, inVC, flit, minOutPort, minOutVC);
 
@@ -675,22 +821,41 @@ bool baseRouting::misrouteCandidate(flitModule * flit, int inPort, int inVC, int
  */
 int baseRouting::nextChannel(int inP, int outP, flitModule * flit) {
 	char outType, inType;
-	int next_channel, inVC = flit->channel;
+	int next_channel = -1, i, index, inVC = flit->channel;
 
 	inType = portType(inP);
 	outType = portType(outP);
-
-	if ((inType == 'p'))
-		next_channel = 0;
-	else if (outP != minOutputPort(flit->destId) && outType == 'a')
-		next_channel = inVC;
-	else if (outType == 'p' || (inType == 'a' && outType == 'h'))
-		next_channel = inVC;
+	vector<int> auxVc;
+	/* Reactive traffic splits evenly the channels between petition and response
+	 * flits, so each kind of traffic receives the same number of resources. */
+	if (g_reactive_traffic && flit->flitType == RESPONSE)
+		auxVc = this->responseVc;
 	else
-		next_channel = inVC + 1;
+		auxVc = this->petitionVc;
 
-	assert(next_channel < g_channels);
-	return (next_channel);
+	assert(auxVc.size() == typeVc.size());
+
+	if (inType == 'p')
+		index = -1;
+	else {
+		for (i = 0; i < auxVc.size(); i++) {
+			if (inType == typeVc[i] && inVC == auxVc[i]) {
+				index = i;
+				break;
+			}
+		}
+	}
+	assert(index < (int) auxVc.size());
+	for (i = index + 1; i < auxVc.size(); i++) {
+		if (outType == typeVc[i]) {
+			next_channel = auxVc[i];
+			break;
+		}
+	}
+
+	if (outType == 'p') next_channel = inVC;
+	assert(next_channel >= 0 && next_channel < g_channels); // Sanity check
+	return next_channel;
 }
 
 /*
@@ -720,17 +885,47 @@ char baseRouting::portType(int port) {
  * for misrouting (only used in certain routing mechanisms)
  */
 bool baseRouting::validMisroutePort(flitModule * flit, int outP, int nextC, double threshold, MisrouteType misroute) {
-	int crd = switchM->getCredits(outP, nextC);
+	int crd = switchM->getCredits(outP, flit->cos, nextC), minOutP = minOutputPort(flit->destId);
 	bool can_rx_flit = switchM->nextPortCanReceiveFlit(outP);
-	int minOutP = minOutputPort(flit->destId);
 	/* Discard those ports that are in use or out of credits */
 	if (!can_rx_flit || crd < g_flit_size || minOutP == outP)
 		return false;
 	else if (g_forceMisrouting || (misroute == GLOBAL_MANDATORY)) return true;
 
-	double q_non_min = switchM->getCreditsOccupancy(outP, nextC) * 100.0 / switchM->getMaxCredits(outP, nextC);
+	double q_non_min;
 	bool valid_candidate = false;
 	int nominations;
+
+	if (g_misrouting_trigger == CGA || g_misrouting_trigger == HYBRID || g_misrouting_trigger == HYBRID_REMOTE) {
+		int auxVc, maxVc;
+		maxVc = (outP < g_global_router_links_offset) ? g_local_link_channels : g_global_link_channels;
+
+		switch (g_congestion_detection) {
+			case PER_PORT:
+				q_non_min = 0;
+				for (auxVc = 0; auxVc < maxVc; auxVc++)
+					q_non_min += switchM->getCreditsOccupancy(outP, flit->cos, auxVc) * 100.0
+							/ switchM->getMaxCredits(outP, flit->cos, auxVc);
+				q_non_min /= maxVc;
+				break;
+			case PER_VC:
+				q_non_min = switchM->getCreditsOccupancy(outP, flit->cos, nextC) * 100.0
+						/ switchM->getMaxCredits(outP, flit->cos, nextC);
+				break;
+			case PER_PORT_MIN:
+				q_non_min = 0;
+				for (auxVc = 0; auxVc < maxVc; auxVc++)
+					q_non_min += switchM->getCreditsMinOccupancy(outP, flit->cos, auxVc) * 100.0
+							/ switchM->getMaxCredits(outP, flit->cos, auxVc);
+				q_non_min /= maxVc;
+				break;
+			case PER_VC_MIN:
+				q_non_min = switchM->getCreditsMinOccupancy(outP, flit->cos, nextC) * 100.0
+						/ switchM->getMaxCredits(outP, flit->cos, nextC);
+				break;
+		}
+	}
+
 	switch (g_misrouting_trigger) {
 		case CGA:
 			valid_candidate = (q_non_min <= threshold);
@@ -819,3 +1014,37 @@ int baseRouting::hopsToDest(int destination) {
 	return path;
 }
 
+/*
+ * Calculate a random Valiant node and set it in the input flit
+ */
+void baseRouting::setValNode(flitModule * flit) {
+	int valDest;
+	/* Select a Valiant destination; if source and destination are in
+	 * the same group, choose a random destination in the same group.
+	 * Otherwise, select a random destination outside the source group. */
+	if (flit->sourceGroup == flit->destGroup) {
+		do {
+			valDest = rand()
+					/ (int) (((unsigned) RAND_MAX + 1) / (g_p_computing_nodes_per_router * g_a_routers_per_group));
+		} while (valDest == g_p_computing_nodes_per_router * g_a_routers_per_group);
+		valDest += flit->sourceGroup * g_a_routers_per_group * g_p_computing_nodes_per_router;
+	} else {
+		do {
+			valDest = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_number_generators));
+		} while ((valDest == g_number_generators)
+				|| (int(valDest / (g_p_computing_nodes_per_router * g_a_routers_per_group))
+						== int(flit->sourceId / (g_p_computing_nodes_per_router * g_a_routers_per_group))));
+	}
+	if ((g_routing == PB || g_routing == PB_ANY) && g_global_misrouting == CRG) {
+		int valOutP = (rand() / (int) (((unsigned) RAND_MAX + 1) / (g_h_global_ports_per_router)))
+				+ g_global_router_links_offset;
+		int valGroup = this->switchM->routing->neighList[valOutP]->hPos;
+		do {
+			valDest = rand()
+					/ (int) (((unsigned) RAND_MAX + 1) / (g_p_computing_nodes_per_router * g_a_routers_per_group));
+			valDest += valGroup * g_p_computing_nodes_per_router * g_a_routers_per_group;
+		} while (valDest == g_number_generators);
+	}
+	assert(0 < valDest < g_number_generators);
+	flit->valId = valDest;
+}

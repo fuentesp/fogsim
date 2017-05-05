@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -18,28 +18,20 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#ifndef class_globalarbiter
-#define class_globalarbiter
+#ifndef class_priorityLrsArbiter
+#define class_priorityLrsArbiter
 
-#include "arbiter.h"
+#include "lrsArbiter.h"
 
-using namespace std;
-
-class globalArbiter: public arbiter {
-public:
-	int *petitions;
-	int *nextChannels;
-	int *nextPorts;
-	int *inputChannels;
-	globalArbiter(int outPortNumber, int ports, switchModule *switchM);
-	~globalArbiter();
-	void initPetitions();
-	bool checkPort();
-
+class priorityLrsArbiter: public lrsArbiter {
 private:
-	bool attendPetition(int port);
-	void updateStatistics(int port);
+	int portPriorOffset;
 
+public:
+	priorityLrsArbiter(PortType type, int portNumber, unsigned short cos, int numPorts, int portPriorOffset,
+			switchModule *switchM);
+	~priorityLrsArbiter();
+	void reorderPortList(int servedPort);
 };
 
-#endif
+#endif /* class_priorityLrsArbiter */

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -24,37 +24,41 @@ pbState::pbState(int switchApos) :
 		m_switchApos(switchApos) {
 
 	m_offset = m_switchApos * g_h_global_ports_per_router;
-	m_globalLinkCongested = new bool*[g_global_links_per_group];
+	m_globalLinkCongested = new bool**[g_global_links_per_group];
 
 	for (int link = 0; link < g_global_links_per_group; link++) {
-		m_globalLinkCongested[link] = new bool[g_global_link_channels];
-		for (int channel = 0; channel < g_global_link_channels; channel++) {
-			m_globalLinkCongested[link][channel] = false;
+		m_globalLinkCongested[link] = new bool*[g_cos_levels];
+		for (int cos = 0; cos < g_cos_levels; cos++) {
+			m_globalLinkCongested[link][cos] = new bool[g_global_link_channels];
+			for (int channel = 0; channel < g_global_link_channels; channel++) {
+				m_globalLinkCongested[link][cos][channel] = false;
+			}
 		}
 	}
 }
 
 pbState::~pbState() {
 	for (int link = 0; link < g_global_links_per_group; link++) {
-		delete[] m_globalLinkCongested[link];
+		for (int cos = 0; cos < g_cos_levels; cos++)
+			delete[] m_globalLinkCongested[link][cos];
+		delete m_globalLinkCongested[link];
 	}
 
 	delete[] m_globalLinkCongested;
 }
 
 void pbState::readFlit(const pbFlit& flit) {
-	int srcOffset, i, channel;
+	int srcOffset, i, cos, channel;
 
 	srcOffset = flit.getSrcOffset();
 
 	assert(srcOffset != m_offset);
 	assert(srcOffset <= g_a_routers_per_group * g_h_global_ports_per_router - g_h_global_ports_per_router);
 
-	for (i = 0; i < g_h_global_ports_per_router; i++) {
-		for (channel = 0; channel < g_global_link_channels; channel++) {
-			m_globalLinkCongested[srcOffset + i][channel] = flit.getGlobalLinkInfo(i, channel);
-		}
-	}
+	for (i = 0; i < g_h_global_ports_per_router; i++)
+		for (cos = 0; cos < g_cos_levels; cos++)
+			for (channel = 0; channel < g_global_link_channels; channel++)
+				m_globalLinkCongested[srcOffset + i][cos][channel] = flit.getGlobalLinkInfo(i, cos, channel);
 }
 
 /* 
@@ -68,12 +72,12 @@ pbFlit* pbState::createFlit(int latency) {
 	return flit;
 }
 
-void pbState::update(int port, int channel, bool linkCongested) {
-	m_globalLinkCongested[port2groupGlobalLinkID(port, m_switchApos)][channel] = linkCongested;
+void pbState::update(int port, unsigned short cos, int channel, bool linkCongested) {
+	m_globalLinkCongested[port2groupGlobalLinkID(port, m_switchApos)][cos][channel] = linkCongested;
 }
 
-bool pbState::isCongested(int link, int channel) {
-	return m_globalLinkCongested[link][channel];
+bool pbState::isCongested(int link, unsigned short cos, int channel) {
+	return m_globalLinkCongested[link][cos][channel];
 }
 
 /* 

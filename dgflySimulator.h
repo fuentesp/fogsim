@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -21,7 +21,6 @@
 #ifndef torus_sim
 #define torus_sim
 
-#include <limits.h>
 #include "generator/trace.h"
 #include "communicator.h"
 
@@ -35,14 +34,21 @@ void writeOutput();
 void writeTransientOutput(char * output_name);
 void writeLatencyHistogram(char * output_name);
 void writeHopsHistogram(char * output_name);
+void writeGeneratorsInjectionProbability(char * output_name);
 void freeMemory();
+void readBufferType(const char * buffer_type, BufferType * var);
 void readSwitchType(const char * switch_type, SwitchType * var);
+void readArbiterType(const char * arbiter_type, ArbiterType * var);
 void readTrafficPattern(const char * traffic_name, TrafficType * var);
 void readRoutingType(const char * routing_type, RoutingType * var);
 void readGlobalMisrouting(const char * global_misrouting, GlobalMisroutingPolicy * var);
 void readDeadlockAvoidanceMechanism(const char * d_a, DeadlockAvoidance * var);
 void readMisroutingTrigger(const char * d_a, MisroutingTrigger * var);
+void readCongestionDetection(const char * d_a, CongestionDetection * var);
 void readTraceDistribution(const char * d_a, TraceAssignation * var);
+void readVcUsage(const char * d_a, VcUsageType * var);
+void readVcAlloc(const char * d_a, VcAllocationMechanism * var);
+void readVcInj(const char * d_a, VcInjectionPolicy * var);
 void readTraceMap(const char * tracemap_filename);
 void buildTraceMap();
 #endif

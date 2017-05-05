@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,7 +22,23 @@
 
 par::par(switchModule *switchM) :
 		baseRouting(switchM) {
+	const int minLocalVCs = 5, minGlobalVCs = 2;
 	assert(g_deadlock_avoidance == DALLY); // Sanity check
+	assert(g_local_link_channels >= minLocalVCs && g_global_link_channels >= minGlobalVCs);
+	/* Remove default VC and port type ordering to replace with specific for oblivious routing */
+	baseRouting::typeVc.clear();
+	baseRouting::petitionVc.clear();
+	baseRouting::responseVc.clear();
+	char aux[] = { 'a', 'a', 'h', 'a', 'a', 'h', 'a' };
+	typeVc.insert(typeVc.begin(), aux, aux + minLocalVCs + minGlobalVCs);
+	int aux2[] = { 0, 1, 0, 2, 3, 1, 4 };
+	petitionVc.insert(petitionVc.begin(), aux2, aux2 + minLocalVCs + minGlobalVCs);
+	assert(typeVc.size() == petitionVc.size());
+	if (g_reactive_traffic) {
+		int aux3[] = { 5, 6, 2, 7, 8, 3, 9 };
+		responseVc.insert(responseVc.begin(), aux3, aux3 + minLocalVCs + minGlobalVCs);
+		assert(typeVc.size() == responseVc.size());
+	}
 }
 
 par::~par() {
@@ -38,7 +54,7 @@ candidate par::enroute(flitModule * flit, int inPort, int inVC) {
 	/* Determine minimal output port (& VC) */
 	destination = flit->destId;
 	minOutP = this->minOutputPort(destination);
-	minOutVC = this->nextChannel(inPort, minOutP, flit->channel);
+	minOutVC = this->nextChannel(inPort, minOutP, flit);
 
 	/* Calculate misroute output port (if any should be taken) */
 	if (this->misrouteCondition(flit, minOutP, minOutVC)) {
@@ -47,6 +63,7 @@ candidate par::enroute(flitModule * flit, int inPort, int inVC) {
 	}
 	if (!misrouteFlit) {
 		/* Flit will be minimally routed */
+		assert(misroute == NONE);
 		selectedRoute.port = minOutP;
 		selectedRoute.vc = minOutVC;
 	}
@@ -57,7 +74,7 @@ candidate par::enroute(flitModule * flit, int inPort, int inVC) {
 	flit->setCurrentMisrouteType(misroute);
 
 	/* Sanity check: ensure port and vc are within allowed ranges */
-	assert(selectedRoute.port < (portCount));
+	assert(selectedRoute.port < portCount);
 	assert(selectedRoute.vc < g_channels); /* Is not restrictive enough, as it might be a forbidden vc for that port, but will be checked after */
 
 	return selectedRoute;
@@ -101,17 +118,16 @@ MisrouteType par::misrouteType(int inport, int inchannel, flitModule * flit, int
 			default:
 				break;
 		}
-	}
-	/* Source group is not liable to global misroute, try local */
+	} /* Source group is not liable to global misroute, try local */
 	else if ((g_global_misrouting == CRG_L || g_global_misrouting == MM_L) && not (flit->localMisroutingDone)
-			&& not (minOutputPort(flit->destId) >= g_global_router_links_offset)) {
+			&& not (minOutputPort(flit->destId) >= g_global_router_links_offset)
+			&& this->switchM->hPos != flit->destGroup) {
 		assert(not (flit->mandatoryGlobalMisrouting_flag));
 		result = LOCAL;
 	}
 #if DEBUG
-	cout << "cycle " << g_cycle << "--> SW " << this->switchM->label << " input Port " << inport << " CV " << flit->channel
-	<< " flit " << flit->flitId << " destSW " << flit->destSwitch << " min-output Port "
-	<< baseRouting::minOutputPort(flit) << " POSSIBLE misroute: ";
+	cout << "Cycle " << g_cycle << "--> SW " << this->switchM->label << " inPort " << inport << " vc " << flit->channel
+	<< " flit " << flit->flitId << " destSW " << flit->destSwitch << " min outPort " << minOutPort << " POSSIBLE misroute: ";
 	switch (result) {
 		case LOCAL:
 		cout << "LOCAL" << endl;
@@ -140,8 +156,8 @@ MisrouteType par::misrouteType(int inport, int inchannel, flitModule * flit, int
 int par::nominateCandidates(flitModule * flit, int inPort, int minOutP, double threshold, MisrouteType &misroute,
 		int* &candidates_port, int* &candidates_VC) {
 	/* Sanity checks for those parameters passed by address */
-	if (!candidates_port) assert(0);
-	if (!candidates_VC) assert(0);
+	assert(!candidates_port);
+	assert(!candidates_VC);
 
 	int outP, nextC, i, port_offset, port_limit, num_candidates = 0;
 	bool valid_candidate;
@@ -151,28 +167,6 @@ int par::nominateCandidates(flitModule * flit, int inPort, int minOutP, double t
 		case LOCAL_MM:
 			port_offset = g_local_router_links_offset;
 			port_limit = g_local_router_links_offset + g_a_routers_per_group - 1;
-			/* Determine VC depending on the group we are at */
-			if (switchM->hPos == flit->sourceGroup) {
-				/* Source group */
-				assert(flit->channel == 0);
-				nextC = 1;
-			} else if (switchM->hPos != flit->destGroup) {
-				/* Intermediate group */
-				assert(flit->channel == 0);
-				nextC = 2;
-			} else {
-				/* Destination group */
-				switch (flit->channel) {
-					case 0:
-						nextC = 2;
-						break;
-					case 1:
-						nextC = 4;
-						break;
-					default:
-						assert(0);
-				}
-			}
 			break;
 		case GLOBAL_MANDATORY:
 			assert(flit->mandatoryGlobalMisrouting_flag);
@@ -180,11 +174,11 @@ int par::nominateCandidates(flitModule * flit, int inPort, int minOutP, double t
 			assert(switchM->hPos == flit->sourceGroup); /* Sanity check: global misrouting is only allowed in source group. */
 			port_offset = g_global_router_links_offset;
 			port_limit = g_global_router_links_offset + g_h_global_ports_per_router;
-			nextC = 0;
-			assert(nextC <= g_global_link_channels);
 			break;
 		default:
-			assert(0);
+			// This point should never be reached
+			assert(false);
+			break;
 	}
 
 	candidates_port = new int[port_limit - port_offset];
@@ -198,44 +192,16 @@ int par::nominateCandidates(flitModule * flit, int inPort, int minOutP, double t
 	for (outP = port_offset; outP < port_limit; outP++) {
 		if (outP == minOutP) continue;
 
+		nextC = this->nextChannel(inPort, outP, flit);
+		assert(nextC <= g_channels);
 		valid_candidate = validMisroutePort(flit, outP, nextC, threshold, misroute);
 
 		/* If it's a valid candidate, store its info */
 		if (valid_candidate) {
 			candidates_port[num_candidates] = outP;
 			candidates_VC[num_candidates] = nextC;
-			num_candidates = num_candidates + 1;
+			num_candidates++;
 		}
 	}
 	return num_candidates;
-}
-
-/*
- * Determines next channel, following an increasing VC
- * order upon hops, unless jumping from local to global
- * or vice-versa.
- */
-int par::nextChannel(int inP, int outP, int inVC) {
-	char outType, inType;
-	int next_channel;
-
-	inType = portType(inP);
-	outType = portType(outP);
-
-	if (inType == 'p')
-		next_channel = 0;
-	else if (inType == outType && (inType == 'a' || inType == 'h'))
-		/* If both input and output are either local or global */
-		next_channel = inVC + 1;
-	else if (inType == 'a' && outType == 'h') {
-		assert(inVC < 4);
-		next_channel = (inVC < 2) ? 0 : 1;
-	} else if (inType == 'h' && outType == 'a') {
-		assert(inVC <= 1);
-		next_channel = (inVC == 0) ? 2 : 4;
-	} else
-		next_channel = inVC;
-
-	assert(next_channel < g_channels); /*  Sanity check */
-	return (next_channel);
 }

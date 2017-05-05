@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -48,9 +48,9 @@ void traceGenerator::action() {
 		g_event_deadlock[trace_node.trace_id][instance] = 0;
 	}
 
-	this->generateFlit();
+	flit = this->generateFlit();
 
-	if (m_flit_created == true) {
+	if (flit != NULL) {
 		assert(flit->head == 1);
 		assert((flit->destId / g_number_generators) < 1);
 
@@ -77,11 +77,11 @@ void traceGenerator::action() {
 		}
 
 		/* Set minimal and valiant paths length */
-		this->determinePaths(sourceLabel, flit->destId, m_valiantLabel);
+		this->determinePaths(flit);
 
 		m_injVC = int(flit->destId * (g_injection_channels) / g_number_generators);
-
-		if ((switchM->switchModule::getCredits(this->pPos, m_injVC) >= g_flit_size)) {
+		/* TODO: Currently CoS level feature is not exploited */
+		if ((switchM->switchModule::getCredits(this->pPos, 0, m_injVC) >= g_flit_size)) {
 			switchM->injectFlit(this->pPos, m_injVC, flit);
 			if (g_cycle >= g_warmup_cycles) switchM->packetsInj++;
 			lastTimeSent = g_cycle;
@@ -90,7 +90,6 @@ void traceGenerator::action() {
 			g_tx_packet_counter++;
 			flit->inCyclePacket = g_cycle;
 			m_packet_in_cycle = flit->inCyclePacket;
-			g_tx_flit_counter++;
 		} else {
 			/* If flit can not be immediately injected, store for later */
 			saved_packet = flit;
@@ -106,16 +105,15 @@ void traceGenerator::action() {
  *  	can be cleared at once.
  *  - If a sending event, generate a new flit.
  */
-void traceGenerator::generateFlit() {
+flitModule* traceGenerator::generateFlit() {
+	flitModule* genFlit = NULL;
 	long destId, destSw;
 	event e;
 
-	m_flit_created = false;
 	if (/*!drop_packets && */pending_packet > 0) {
-		flit = saved_packet;
+		genFlit = saved_packet;
 		saved_packet = NULL;
 		pending_packet = 0;
-		m_flit_created = true;
 	} else {
 		if (!event_empty(&events)) {
 			while (!event_empty(&events) && head_event(&events).type == RECEPTION) {
@@ -145,22 +143,22 @@ void traceGenerator::generateFlit() {
 					event re = e;
 					re.type = RECEPTION;
 					ins_occur(&occurs, re);
-					return;
+					return NULL;
 				}
 
 				destSw = floor(destId / g_p_computing_nodes_per_router);
 				if (destSwitch >= g_number_switches) cerr << "destSwitch=" << destSwitch << endl;
 				assert(destSwitch < g_number_switches);
 
-				flit = new flitModule(g_tx_packet_counter, g_tx_flit_counter, m_flitSeq, sourceLabel, destId, destSw, 0,
-						1, 1);
+				genFlit = new flitModule(g_tx_packet_counter, g_tx_flit_counter, m_flitSeq, sourceLabel, destId, destSw,
+						0, 1, 1);
 				flit->task = e.task;
 				flit->length = e.length;
 				flit->mpitype = e.mpitype;
-				m_flit_created = true;
 			}
 		}
 	}
+	return genFlit;
 }
 
 bool traceGenerator::isGenerationEnded() {

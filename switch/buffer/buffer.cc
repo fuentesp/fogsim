@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -38,8 +38,6 @@ buffer::buffer(int bufferNumber, int buffCap, float delay) {
 	this->lastExtractCycle = -10000000;
 	this->lastReceiveCycle = -10000000;
 	for (int j = 0; j <= bufferCapacity; j++) {
-		assert(j >= 0);
-		assert(j <= bufferCapacity);
 		bufferEntryCycle[j] = -1;
 		bufferContent[j] = NULL;
 	}
@@ -56,8 +54,6 @@ buffer::buffer(int bufferNumber, int buffCap, float delay) {
 
 buffer::~buffer() {
 	for (int j = 0; j <= bufferCapacity; j++) {
-		assert(j >= 0);
-		assert(j <= bufferCapacity);
 		delete bufferContent[j];
 	}
 	delete[] bufferContent;
@@ -90,6 +86,7 @@ bool buffer::extract(flitModule* &flitExtracted, float length) {
 void buffer::reorderBuffer() {
 	if (lastExtractCycle >= g_internal_cycle) {
 		head = (head + 1) % (this->bufferCapacity + 1);
+		if (bufferEntryCycle[head] == -1) assert(tail == head);
 	}
 }
 
@@ -101,16 +98,27 @@ float buffer::getHeadEntryCycle() {
 	return bufferEntryCycle[head];
 }
 
-void buffer::checkFlit(flitModule* &nextFlit) {
-	if (bufferEntryCycle[head] != -1) {
-		assert(bufferContent[head] != NULL);
-		nextFlit = bufferContent[head];
+void buffer::checkFlit(flitModule* &nextFlit, int offset) {
+	/* Ensure offset from head is below occupancy (both from
+	 * buffer alleged and actual occupancy) */
+	assert(offset >= 0 && offset <= this->getBufferOccupancy());
+	for (int i = 0; i < offset; i++) {
+		int aux = (head + i) % (this->bufferCapacity + 1);
+		if (bufferContent[aux] == NULL) cerr << "bufferContent NULL in i offset " << i << endl;
+		assert(bufferContent[aux] != NULL);
+	}
+	offset += head;
+	offset %= (this->bufferCapacity + 1);
+	if (bufferEntryCycle[offset] != -1) {
+		assert(bufferContent[offset] != NULL);
+		nextFlit = bufferContent[offset];
 	} else {
 		nextFlit = NULL;
 	}
 }
 
 void buffer::insert(flitModule *flit, float length) {
+	assert(flit != NULL);
 	assert(this->getSpace() > 0);
 	bufferEntryCycle[tail] = g_internal_cycle + delay;
 	bufferContent[tail] = flit;

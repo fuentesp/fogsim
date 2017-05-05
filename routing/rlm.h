@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -37,7 +37,6 @@ private:
 	int nominateCandidates(flitModule * flit, int inPort, int minOutP, double threshold, MisrouteType &misroute,
 			int* &candidates_port, int* &candidates_VC);
 	bool strictRoute(int s_router, int i_router, int d_router);
-	int nextChannel(int inP, int outP, flitModule * flit);
 };
 
 #endif

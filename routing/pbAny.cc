@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2015 University of Cantabria
+ Copyright (C) 2017 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,6 +23,19 @@
 pbAny::pbAny(switchModule *switchM) :
 		baseRouting(switchM) {
 	assert(g_deadlock_avoidance == DALLY); // Sanity check
+	assert(g_vc_usage == BASE);
+	/* Remove default VC and port type ordering to replace with specific for PB-any routing */
+	baseRouting::typeVc.clear();
+	baseRouting::petitionVc.clear();
+	baseRouting::responseVc.clear();
+	char aux[] = { 'a', 'h', 'a', 'a', 'h', 'a' };
+	typeVc.insert(typeVc.begin(), aux, aux + 6);
+	int aux2[] = { 0, 0, 1, 2, 1, 3 };
+	petitionVc.insert(petitionVc.begin(), aux2, aux2 + 6);
+	if (g_reactive_traffic) {
+		int aux3[] = { 4, 2, 5, 6, 3, 7 };
+		responseVc.insert(responseVc.begin(), aux3, aux3 + 6);
+	}
 }
 
 pbAny::~pbAny() {
@@ -80,8 +93,10 @@ bool pbAny::misrouteCondition(flitModule * flit, int inPort) {
 
 	if ((inPort < g_p_computing_nodes_per_router) && (minOutP >= g_p_computing_nodes_per_router)) {
 		/* Calculate credit occupancy for the minimal and Valiant paths output port */
-		minQueueLength = switchM->switchModule::getCreditsOccupancy(minOutP, this->nextChannel(inPort, minOutP, flit));
-		valQueueLength = switchM->switchModule::getCreditsOccupancy(valOutP, this->nextChannel(inPort, valOutP, flit));
+		minQueueLength = switchM->switchModule::getCreditsOccupancy(minOutP, flit->cos,
+				this->nextChannel(inPort, minOutP, flit));
+		valQueueLength = switchM->switchModule::getCreditsOccupancy(valOutP, flit->cos,
+				this->nextChannel(inPort, valOutP, flit));
 		/* UGAL-L(ocal) condition: if the product of minimal outport queue occupancy and the
 		 * minimal path length is greater than the corresponding of Valiant path (plus a
 		 * local threshold), then do Valiant misrouting. */
@@ -115,36 +130,4 @@ MisrouteType pbAny::misrouteType(int inport, int inchannel, flitModule * flit, i
 int pbAny::nominateCandidates(flitModule * flit, int inPort, int minOutP, double threshold, MisrouteType &misroute,
 		int* &candidates_port, int* &candidates_VC) {
 	assert(0);
-}
-
-int pbAny::nextChannel(int inP, int outP, flitModule * flit) {
-	char outType, inType;
-	int next_channel, i, index, inVC = flit->channel;
-
-	inType = portType(inP);
-	outType = portType(outP);
-	char vcTypeOrder[] = { 'a', 'h', 'a', 'a', 'h', 'a' };
-	int vcOrder[] = { 0, 0, 1, 2, 1, 3 };
-
-	if (inType == 'p')
-		index = -1;
-	else {
-		for (i = 0; i < g_local_link_channels + g_global_link_channels; i++) {
-			if (inType == vcTypeOrder[i] && inVC == vcOrder[i]) {
-				index = i;
-				break;
-			}
-		}
-	}
-	for (i = index + 1; i < g_local_link_channels + g_global_link_channels; i++) {
-		if (outType == vcTypeOrder[i]) {
-			next_channel = vcOrder[i];
-			break;
-		}
-	}
-
-	if (outType == 'p') next_channel = inVC;
-	assert(next_channel < g_channels);
-
-	return (next_channel);
 }
