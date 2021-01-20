@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,23 +22,15 @@
 
 par::par(switchModule *switchM) :
 		baseRouting(switchM) {
-	const int minLocalVCs = 5, minGlobalVCs = 2;
 	assert(g_deadlock_avoidance == DALLY); // Sanity check
-	assert(g_local_link_channels >= minLocalVCs && g_global_link_channels >= minGlobalVCs);
-	/* Remove default VC and port type ordering to replace with specific for oblivious routing */
-	baseRouting::typeVc.clear();
-	baseRouting::petitionVc.clear();
-	baseRouting::responseVc.clear();
-	char aux[] = { 'a', 'a', 'h', 'a', 'a', 'h', 'a' };
-	typeVc.insert(typeVc.begin(), aux, aux + minLocalVCs + minGlobalVCs);
-	int aux2[] = { 0, 1, 0, 2, 3, 1, 4 };
-	petitionVc.insert(petitionVc.begin(), aux2, aux2 + minLocalVCs + minGlobalVCs);
-	assert(typeVc.size() == petitionVc.size());
-	if (g_reactive_traffic) {
-		int aux3[] = { 5, 6, 2, 7, 8, 3, 9 };
-		responseVc.insert(responseVc.begin(), aux3, aux3 + minLocalVCs + minGlobalVCs);
-		assert(typeVc.size() == responseVc.size());
-	}
+	assert(g_vc_usage == BASE);
+	/* Set up the VC management for PAR */
+	const int minLocalVCs = 5, minGlobalVCs = 2;
+	portClass aux[] = { portClass::local, portClass::local, portClass::global, portClass::local, portClass::local,
+			portClass::global, portClass::local };
+	vector<portClass> typeVc(aux, aux + minLocalVCs + minGlobalVCs);
+	this->vcM = new vcMngmt(&typeVc, switchM);
+	vcM->checkVcArrayLengths(minLocalVCs, minGlobalVCs);
 }
 
 par::~par() {
@@ -54,7 +46,7 @@ candidate par::enroute(flitModule * flit, int inPort, int inVC) {
 	/* Determine minimal output port (& VC) */
 	destination = flit->destId;
 	minOutP = this->minOutputPort(destination);
-	minOutVC = this->nextChannel(inPort, minOutP, flit);
+	minOutVC = vcM->nextChannel(inPort, minOutP, flit);
 
 	/* Calculate misroute output port (if any should be taken) */
 	if (this->misrouteCondition(flit, minOutP, minOutVC)) {
@@ -192,7 +184,7 @@ int par::nominateCandidates(flitModule * flit, int inPort, int minOutP, double t
 	for (outP = port_offset; outP < port_limit; outP++) {
 		if (outP == minOutP) continue;
 
-		nextC = this->nextChannel(inPort, outP, flit);
+		nextC = vcM->nextChannel(inPort, outP, flit);
 		assert(nextC <= g_channels);
 		valid_candidate = validMisroutePort(flit, outP, nextC, threshold, misroute);
 

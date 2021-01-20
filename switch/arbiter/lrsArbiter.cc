@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -40,5 +40,6 @@ void lrsArbiter::reorderPortList(int servedPort) {
 
 void lrsArbiter::markServedPort(int servedPort) {
 	this->reorderPortList(servedPort);
+	this->arbiter::markServedPort(servedPort);
 }
 

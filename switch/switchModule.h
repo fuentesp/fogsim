@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -38,7 +38,7 @@
 
 using namespace std;
 
-class switchModule: public gModule {
+class switchModule : public gModule {
 protected:
 	inPort **inPorts;
 	outPort **outPorts;
@@ -47,12 +47,27 @@ protected:
 	queue<pbFlit> incomingPb;
 	pbState piggyBack; /* PiggyBacking: global links state handler */
 	queue<caFlit> incomingCa;
+	int qcnQlen;
+	int *qcnQlenOld; /* Queue length old (last qcn sampling calculation) by port */
+	int *qcnCpSamplingCounter; /* Counter of cycles */
+	int *qcnRpTxBCount; /* Counter of phits left for RP execution */
+	float *portEnrouteMinProb; /* Probability of routing a packet minimal or non-m. for each outport - MINCOND */
+	int *qcnPortFb;
+        /* ACOR per SWITCH management variables */
+        acorState acorSwStatus; /* Acor state for this router */
+        int acor_hyst_cycles_counter; /* Hysteresis cycles duration counter */
+        int acor_inc_state_th_packets;
+        int acor_dec_state_th_packets;
 
+	void sendCredits(int port, unsigned short cos, int channel, flitModule * flit);
 	double calculateBaseLatency(const flitModule * flit);
-	virtual void sendFlit(int input_port, unsigned short cos, int input_channel, int outP, int nextP, int nextC);
+	virtual void xbarTraversal(int input_port, unsigned short cos, int input_channel, int outP, int nextP, int nextC);
 	void updateMisrouteCounters(int outP, flitModule * flitEx);
 	void trackTransitStatistics(flitModule *flitEx, int input_channel, int outP, int nextC);
 	virtual void printSwitchStatus();
+	virtual void qcnOccupancySampling(int port);
+	void qcnMinProbabilityDecrease(int port, float qcnfb);
+	void qcnFeedbackComparison(int port, float qcnfb);
 
 	/* Befriended functions to grant access to buffers & other variables. */
 	friend void caHandler::update();
@@ -61,17 +76,20 @@ protected:
 	friend bool cosArbiter::portCanSendFlit(int port, unsigned short cos, int vc);
 	friend void ageArbiter::reorderPortList();
 	friend void priorityAgeArbiter::reorderPortList();
+	friend void arbiter::reorderListQcn();
 
 public:
 	unsigned short cosLevels;
 	caHandler m_ca_handler;
 	baseRouting* routing;
+	baseRouting* qcnRouting;
 	inputArbiter **inputArbiters;
 	outputArbiter **outputArbiters;
 	int label, aPos, hPos;
 	int messagesInQueuesCounter;
 	bool escapeNetworkCongested;
 	long long packetsInj;
+	long long cnmPacketsInj;
 	float *queueOccupancy;
 	float *injectionQueueOccupancy;
 	float *localQueueOccupancy;
@@ -81,6 +99,7 @@ public:
 	float *globalEscapeQueueOccupancy;
 	bool *reservedOutPort;
 	bool **reservedInPort;
+        int acor_packets_blocked_counter; /* Counter of ACOR packets blocked */
 
 	switchModule(string name, int label, int aPos, int hPos, int ports, int vcCount);
 	virtual ~switchModule();
@@ -102,8 +121,6 @@ public:
 	void receiveCreditFlit(int port, const creditFlit& crdFlit);
 	void receivePbFlit(const pbFlit& crdFlit);
 	void receiveCaFlit(const caFlit& flit);
-	void sendCredits(int port, unsigned short cos, int channel, flitModule * flit);
-
 	inline int getSwPortSize() {
 		return portCount;
 	}
@@ -124,6 +141,13 @@ public:
 	void resetQueueOccupancy();
 	void setQueueOccupancy();
 	void action();
+
+	short int getPortEnrouteMinimalProbability(int port);
+
+        void acorResetSwitchHysteresisStatus();
+        acorState acorGetState();
+        void acorIncState();
+        void acorDecState();
 };
 
 #endif

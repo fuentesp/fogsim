@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -55,12 +55,7 @@ void traceGenerator::action() {
 		assert((flit->destId / g_number_generators) < 1);
 
 		/* Select a Valiant destination (not in source group) */
-		do {
-			m_valiantLabel = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_number_generators));
-		} while ((m_valiantLabel == g_number_generators)
-				|| (int(m_valiantLabel / (g_p_computing_nodes_per_router * g_a_routers_per_group))
-						== int(sourceLabel / (g_p_computing_nodes_per_router * g_a_routers_per_group))));
-		flit->valId = m_valiantLabel;
+		switchM->routing->setValNode(flit);
 		flit->valNodeReached = 0;
 
 		if (g_deadlock_avoidance == EMBEDDED_RING) {
@@ -79,7 +74,7 @@ void traceGenerator::action() {
 		/* Set minimal and valiant paths length */
 		this->determinePaths(flit);
 
-		m_injVC = int(flit->destId * (g_injection_channels) / g_number_generators);
+		m_injVC = this->getInjectionVC(flit->destId, RESPONSE);
 		/* TODO: Currently CoS level feature is not exploited */
 		if ((switchM->switchModule::getCredits(this->pPos, 0, m_injVC) >= g_flit_size)) {
 			switchM->injectFlit(this->pPos, m_injVC, flit);

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -20,6 +20,7 @@
 
 #include "steady.h"
 #include <iostream>
+#include <cmath>
 #include "../generatorModule.h"
 
 steadyTraffic::steadyTraffic(int sourceLabel, int pPos, int aPos, int hPos) {
@@ -27,6 +28,7 @@ steadyTraffic::steadyTraffic(int sourceLabel, int pPos, int aPos, int hPos) {
 	this->pPos = pPos;
 	this->aPos = aPos;
 	this->hPos = hPos;
+	this->rpDestination = -1;
 }
 
 steadyTraffic::~steadyTraffic() {
@@ -39,10 +41,14 @@ steadyTraffic::~steadyTraffic() {
  * intra-node traffic that won't stress the network).
  */
 int steadyTraffic::setDestination(TrafficType type) {
-	int destSwitch, destLabel, destNode, destSwOffset, destGroup, groups;
+	int destSwitch, destLabel, destNodeOffset, destSwOffset, destGroup, groups;
+	double aux;
 
 	groups = g_h_global_ports_per_router * g_a_routers_per_group + 1;
 	destGroup = module((this->hPos + g_adv_traffic_distance), groups);
+	do {
+		destNodeOffset = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_p_computing_nodes_per_router));
+	} while (destNodeOffset >= g_p_computing_nodes_per_router);
 
 	do {
 		switch (type) {
@@ -93,16 +99,64 @@ int steadyTraffic::setDestination(TrafficType type) {
 				destSwitch = destGroup * g_a_routers_per_group + destSwOffset;
 				break;
 
+			case oADV:
+				/* Oversubscribed adversarial traffic pattern: all the routers with the same offset within
+				 * their group target the same destination node in the network, to evaluate the impact of
+				 * endpoint congestion. The destination is computed as a given local distance from the current
+				 * offset in the group and a given global distance from the first group; local and global
+				 * distances are the same for ease of implementation. */
+				destSwOffset = module((this->aPos + g_adv_traffic_distance), groups);
+				destSwitch = destSwOffset * g_a_routers_per_group + destSwOffset;
+				destNodeOffset = 0;
+				break;
+
+			case HOTREGION:
+				aux = ((double) rand() / (double) (RAND_MAX));
+				// If random is lower than the percentage of the traffic to send to hotregion
+				if (aux <= (g_percent_traffic_to_congest / 100.0)) {
+					destSwitch = (g_percent_nodes_into_region / 100) * rand()
+							/ (int) (((unsigned) RAND_MAX + 1) / (g_number_switches));
+					// Verification of destSwitch >=0 is below in the code
+					assert(destSwitch <= ceil(g_number_generators * g_percent_nodes_into_region / 100) - 1);
+				} else
+					do {
+						destSwitch = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_number_switches));
+					} while ((destSwitch == g_number_switches));
+				break;
+
+			case HOTSPOT:
+				aux = ((double) rand() / (double) (RAND_MAX));
+				// If random is lower than the percentage of the traffic to send to hotspot
+				if (aux <= (g_percent_traffic_to_congest / 100.0)) {
+					destSwitch = g_hotspot_node / g_p_computing_nodes_per_router;
+					destNodeOffset = g_hotspot_node - destSwitch * g_p_computing_nodes_per_router;
+				} else
+					do {
+						destSwitch = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_number_switches));
+					} while ((destSwitch == g_number_switches));
+				break;
+			case RANDOMPERMUTATION:
+				// First execution, node is not selected for this generator
+				if (rpDestination == -1) {
+					do {
+						aux = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_available_generators.size()));
+						rpDestination = g_available_generators.at(aux);
+					} while (rpDestination == sourceLabel);
+					g_available_generators.erase(g_available_generators.begin() + aux);
+				}
+				destSwitch = rpDestination / g_p_computing_nodes_per_router;
+				destNodeOffset = rpDestination - destSwitch * g_p_computing_nodes_per_router;
+				break;
 			default:
 				cerr << "ERROR: Unrecognized steady traffic pattern!: " << type << endl;
 				exit(0);
 		}
 
 		/* After destination router is selected, destination node offset within router is randomly picked. */
-		do {
-			destNode = rand() / (int) (((unsigned) RAND_MAX + 1) / (g_p_computing_nodes_per_router));
-		} while (destNode >= g_p_computing_nodes_per_router);
-		destLabel = destSwitch * g_p_computing_nodes_per_router + destNode;
+		destLabel = destSwitch * g_p_computing_nodes_per_router + destNodeOffset;
+		if (type == HOTSPOT && aux <= (g_percent_traffic_to_congest / 100.0)) {
+			assert(destLabel == g_hotspot_node);
+		}
 
 	} while (destLabel == sourceLabel);
 

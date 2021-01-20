@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -22,20 +22,15 @@
 
 pbAny::pbAny(switchModule *switchM) :
 		baseRouting(switchM) {
+	const int minLocalVCs = 4, minGlobalVCs = 2;
 	assert(g_deadlock_avoidance == DALLY); // Sanity check
 	assert(g_vc_usage == BASE);
-	/* Remove default VC and port type ordering to replace with specific for PB-any routing */
-	baseRouting::typeVc.clear();
-	baseRouting::petitionVc.clear();
-	baseRouting::responseVc.clear();
-	char aux[] = { 'a', 'h', 'a', 'a', 'h', 'a' };
-	typeVc.insert(typeVc.begin(), aux, aux + 6);
-	int aux2[] = { 0, 0, 1, 2, 1, 3 };
-	petitionVc.insert(petitionVc.begin(), aux2, aux2 + 6);
-	if (g_reactive_traffic) {
-		int aux3[] = { 4, 2, 5, 6, 3, 7 };
-		responseVc.insert(responseVc.begin(), aux3, aux3 + 6);
-	}
+	/* Set up the VC management specific for PB-any routing */
+	portClass aux[] = { portClass::local, portClass::global, portClass::local, portClass::local, portClass::global,
+			portClass::local };
+	vector<portClass> typeVc(aux, aux + minLocalVCs + minGlobalVCs);
+	this->vcM = new vcMngmt(&typeVc, switchM);
+	vcM->checkVcArrayLengths(minLocalVCs, minGlobalVCs);
 }
 
 pbAny::~pbAny() {
@@ -68,7 +63,7 @@ candidate pbAny::enroute(flitModule * flit, int inPort, int inVC) {
 	}
 
 	selectedRoute.neighPort = this->neighPort[selectedRoute.port];
-	selectedRoute.vc = this->nextChannel(inPort, selectedRoute.port, flit);
+	selectedRoute.vc = vcM->nextChannel(inPort, selectedRoute.port, flit);
 
 	/* Sanity checks */
 	assert(selectedRoute.port < portCount && selectedRoute.port >= 0);
@@ -94,9 +89,9 @@ bool pbAny::misrouteCondition(flitModule * flit, int inPort) {
 	if ((inPort < g_p_computing_nodes_per_router) && (minOutP >= g_p_computing_nodes_per_router)) {
 		/* Calculate credit occupancy for the minimal and Valiant paths output port */
 		minQueueLength = switchM->switchModule::getCreditsOccupancy(minOutP, flit->cos,
-				this->nextChannel(inPort, minOutP, flit));
+				vcM->nextChannel(inPort, minOutP, flit));
 		valQueueLength = switchM->switchModule::getCreditsOccupancy(valOutP, flit->cos,
-				this->nextChannel(inPort, valOutP, flit));
+				vcM->nextChannel(inPort, valOutP, flit));
 		/* UGAL-L(ocal) condition: if the product of minimal outport queue occupancy and the
 		 * minimal path length is greater than the corresponding of Valiant path (plus a
 		 * local threshold), then do Valiant misrouting. */

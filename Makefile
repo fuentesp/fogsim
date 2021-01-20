@@ -4,7 +4,7 @@ CC = g++
 RFLAGS = -O2 -std=c++11
 CFLAGS = -c -g -Wno-sign-compare -std=c++11
 DFLAGS = -g -Wall
-ROUTING = routing.h flexibleRouting.h ofar.h par.h pb.h pbAny.h rlm.h ugal.h
+ROUTING = routing.h min.h minCond.h val.h valAny.h obl.h acor.h pb.h pbAny.h pbAcor.h srcAdp.h par.h ugal.h ofar.h rlm.h olm.h car.h
 ROUTING_FILES = $(addprefix routing/, $(ROUTING))
 FLIT = flitModule.h pbFlit.h creditFlit.h caFlit.h
 FLIT_FILES = $(addprefix flit/, $(FLIT))
@@ -16,10 +16,11 @@ SWITCH = switchModule.h ioqSwitchModule.h
 ARBITER = arbiter.h cosArbiter.h lrsArbiter.h priorityLrsArbiter.h rrArbiter.h priorityRrArbiter.h ageArbiter.h priorityAgeArbiter.h inputArbiter.h outputArbiter.h
 PORT = port.h bufferedPort.h inPort.h outPort.h bufferedOutPort.h dynBufInPort.h dynBufOutPort.h dynBufBufferedOutPort.h
 BUFFER = buffer.h
-SWITCH_FOLDERS = $(SWITCH) $(ARBITER) $(BUFFER) $(PORT)
+VCMNGMT = vcMngmt.h oppVcMngmt.h rlmVcMngmt.h flexVc.h tbFlexVc.h qcnVcMngmt.h
+SWITCH_FOLDERS = $(SWITCH) $(ARBITER) $(BUFFER) $(PORT) $(VCMNGMT)
 SWITCH_FILES = switch/*.h switch/*/*.h
 
-HEADERS = dgflySimulator.h gModule.h configurationFile.h global.h pbState.h caHandler.h communicator.h generator/dimemas.h routing/min.h routing/minCond.h routing/val.h routing/valAny.h routing/olm.h $(FLIT_FILES) $(ROUTING_FILES) $(GENERATOR_FILES) $(SWITCH_FILES)
+HEADERS = dgflySimulator.h gModule.h configurationFile.h global.h pbState.h caHandler.h communicator.h generator/dimemas.h $(FLIT_FILES) $(ROUTING_FILES) $(GENERATOR_FILES) $(SWITCH_FILES)
 	
 fogsim:
 	$(CC) $(RFLAGS) dgflySimulator.cc gModule.cc configurationFile.cc global.cc pbState.cc caHandler.cc communicator.cc $(FLIT_FILES:.h=.cc) $(ROUTING_FILES:.h=.cc) $(SWITCH_FILES:.h=.cc) $(GENERATOR_FILES:.h=.cc) -o fogsim
@@ -71,6 +72,9 @@ $(PORT:.h=.o): %.o: switch/port/%.cc $(HEADERS)
 
 $(BUFFER:.h=.o): %.o: switch/buffer/%.cc $(HEADERS)
 	$(CC) $(CFLAGS) switch/buffer/$(@:.o=.cc)
+
+$(VCMNGMT:.h=.o): %.o: switch/vcManagement/%.cc $(HEADERS)
+	$(CC) $(CFLAGS) switch/vcManagement/$(@:.o=.cc)
 
 clean:
 	rm -f *.o fogsim

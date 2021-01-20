@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -56,6 +56,7 @@ public:
 	long double petitionLatency;
 	unsigned short cos; /* Class of service - Ethernet 802.1q */
 	int length;
+    acorState acorFlitStatus;
 
 	/* Hop counters*/
 	int hopCount;
@@ -78,6 +79,7 @@ public:
 
 	/* Routing related (help switch to know which output will flit be routed through) */
 	int nextP, nextVC, prevP, prevVC;
+	bool currentlyEnrouted;
 
 	/* TRACES */
 	int task;
@@ -86,8 +88,13 @@ public:
 	/* Graph500 */
 	int graph_queries;
 
+	/* Quantized Congestion Notification */
+	unsigned short fb;
+	int qoff;
+	int qdelta;
+
 	flitModule(int packetId, int flitId, int flitSeq, int sourceId, int destId, int destSwitch, int valId, bool head,
-			bool tail, unsigned short cos = 0);
+			bool tail, unsigned short cos = 0, FlitType flitType = RESPONSE);
 	void addHop(int outP, int swId);
 	void addContention(int inP, int swId);
 	void subsContention(int outP, int swId);
@@ -106,6 +113,7 @@ public:
 	void setGlobalMisrouteAtInjection(bool global_misroute_at_injection_flag);
 	bool isGlobalMisrouteAtInjection() const;
 	int getMisrouteCount(MisrouteType type) const;
+	void setQcnParameters(unsigned short fb, int qoff, int qdelta);
 
 private:
 	bool m_misrouted;

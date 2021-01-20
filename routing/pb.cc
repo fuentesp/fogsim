@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,6 +23,17 @@
 pb::pb(switchModule *switchM) :
 		baseRouting(switchM) {
 	assert(g_deadlock_avoidance == DALLY); // Sanity check
+	/* Set up the vc management. */
+	const int minLocalVCs = 3, minGlobalVCs = 2;
+	portClass aux[] = { portClass::local, portClass::global, portClass::local, portClass::global, portClass::local };
+	vector<portClass> typeVc(aux, aux + minLocalVCs + minGlobalVCs);
+	if (g_vc_usage == TBFLEX)
+		this->vcM = new tbFlexVc(&typeVc, switchM);
+	else if (g_vc_usage == FLEXIBLE)
+		this->vcM = new flexVc(&typeVc, switchM);
+	else
+		this->vcM = new vcMngmt(&typeVc, switchM);
+	vcM->checkVcArrayLengths(minLocalVCs, minGlobalVCs);
 }
 
 pb::~pb() {
@@ -56,7 +67,7 @@ candidate pb::enroute(flitModule * flit, int inPort, int inVC) {
 	}
 
 	selectedRoute.neighPort = this->neighPort[selectedRoute.port];
-	selectedRoute.vc = this->nextChannel(inPort, selectedRoute.port, flit);
+	selectedRoute.vc = vcM->nextChannel(inPort, selectedRoute.port, flit);
 
 	/* Sanity checks */
 	assert(selectedRoute.port < portCount && selectedRoute.port >= 0);
@@ -82,9 +93,9 @@ bool pb::misrouteCondition(flitModule * flit, int inPort) {
 	if ((inPort < g_p_computing_nodes_per_router) && (minOutP >= g_p_computing_nodes_per_router)) {
 		/* Calculate credit occupancy for the minimal and Valiant paths output port */
 		minQueueLength = switchM->switchModule::getCreditsOccupancy(minOutP, flit->cos,
-				this->nextChannel(inPort, minOutP, flit));
+				vcM->nextChannel(inPort, minOutP, flit));
 		valQueueLength = switchM->switchModule::getCreditsOccupancy(valOutP, flit->cos,
-				this->nextChannel(inPort, valOutP, flit));
+				vcM->nextChannel(inPort, valOutP, flit));
 		/* UGAL-L(ocal) condition: if the product of minimal outport queue occupancy and the
 		 * minimal path length is greater than the corresponding of Valiant path (plus a
 		 * local threshold), then do Valiant misrouting. */

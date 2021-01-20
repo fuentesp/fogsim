@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -31,6 +31,7 @@ class baseRouting;
 class arbiter {
 protected:
 	int *portList; /* Stores the order for assigned resources to arbitrate */
+	short *qcnList; /* Stores the information about QCN usage for each head of buffer flit */
 
 public:
 	int label; /* Arbiter ID */
@@ -43,6 +44,8 @@ public:
 	virtual ~arbiter();
 	virtual int getServingPort(int offset);
 	virtual void markServedPort(int servedPort);
+	void reorderListQcn();
+	void updateQcn(int servedPort);
 };
 
 #endif

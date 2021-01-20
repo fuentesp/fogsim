@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -184,11 +184,12 @@ enum BufferType {
  * Flit types:
  * - PETITION:	petition packet for reactive traffic
  * - RESPONSE:	default option
+ * - CNM:              congestion notification message
  * - SIGNAL:	end-of-message-dispatching signal (for Graph500 synthetic traffic model)
  * - ALLREDUCE: allreduce message (for Graph500 synthetic traffic model)
  */
 enum FlitType {
-	PETITION, RESPONSE, SIGNAL, ALLREDUCE
+	PETITION, RESPONSE, CNM, SIGNAL, ALLREDUCE
 };
 
 extern BufferType g_buffer_type;
@@ -200,8 +201,7 @@ extern int g_global_queue_reserved; /* Reserved queue space when using
 /***
  * Arbiter types:
  * -RR:						Round-Robin.
- * -PrioRR: 				Priority RR, gives priority to certain ports over
- * 							others.
+ * -PrioRR:					Priority RR, gives priority to certain ports over others.
  * -LRS:					Least Recently Served, default option, it serves
  * 							 first the port which has been most time without
  * 							 being attended.
@@ -241,6 +241,9 @@ extern ArbiterType g_output_arbiter_type;
  * 			linked to the same local neighbor
  * 			router (this is roughly equivalent
  * 			to a mixed ADV+1,+2,..+H)
+ * Oversubscribed ADVERSARIAL (oADV): every
+ * 			router with the same offset within
+ * 			its group target the same node.
  * -ALL-TO-ALL
  * -MIX: COMBINATION OF RANDOM, LOCAL
  * 			ADVERSARIAL & GLOBAL ADVERSARIAL
@@ -266,6 +269,13 @@ extern ArbiterType g_output_arbiter_type;
  * 			triggering a response per every
  * 			petition received at a node.
  * -GRAPH500: Syntechic Traffic model of the Graph500 Communications
+ * -HOTREGION: g_percent_traffic_to_congest % of the traffic is sent to the
+ * 			first g_percent_nodes_into_region % of the destinations; the
+ * 			rest is sent UN.
+ * -HOTSPOT: g_percent_traffic_to_congest % of the traffic is sent to node g_hostspop_node;
+ * 			the rest is sent UN.
+ * -RANDOM PERMUTATION: each node sends to a selected unique destination during all simulation. The
+ * permutation does not imply bidirectional assigment of each pair of nodes.
  */
 enum TrafficType {
 	UN,
@@ -273,6 +283,7 @@ enum TrafficType {
 	ADV_RANDOM_NODE,
 	ADV_LOCAL,
 	ADVc,
+	oADV,
 	ALL2ALL,
 	MIX,
 	TRANSIENT,
@@ -282,7 +293,12 @@ enum TrafficType {
 	UN_RCTV,
 	ADV_RANDOM_NODE_RCTV,
 	BURSTY_UN_RCTV,
-	GRAPH500
+	GRAPH500,
+	HOTREGION,
+	HOTREGION_RCTV,
+	HOTSPOT,
+	RANDOMPERMUTATION,
+	RANDOMPERMUTATION_RCTV
 };
 
 extern TrafficType g_traffic;
@@ -294,6 +310,7 @@ extern int g_adv_traffic_local_distance; /* Distance to the adverse traffic dest
 /* Auxiliary parameters (employed in many traffic types) */
 extern TrafficType *g_phase_traffic_type;
 extern int *g_phase_traffic_adv_dist;
+extern float *g_phase_traffic_probability;
 extern int *g_phase_traffic_percent;
 /* Transient traffic parameters */
 extern int g_transient_traffic_cycle;
@@ -323,6 +340,15 @@ extern vector<long long> g_graph_queries_rem_minus_means; /* Queries remaining m
 extern long long ***g_graph_p2pmess_node2node; /* Number of p2p messages from node to node by stage */
 extern int g_graph_max_levels; /*			Maximum number of levels */
 extern long long g_graph_p2pmess; /*		P2P messages sent during execution of Graph500 simulation */
+/*												response  (-1 for infinite)*/
+/* End-point congestion traffic parameters */
+extern int g_percent_traffic_to_congest; /* The percentage of the total traffic which is sent to congested hosts */
+/* Hot-region traffic parameters */
+extern float g_percent_nodes_into_region; /* The percentage of the total nodes to consider as a hot-region */
+/* Hot-spot traffic parameters */
+extern int g_hotspot_node; /* Node to consider as a hot-spot */
+/* Random permutation auxiliar variable */
+extern vector<int> g_available_generators;
 
 /***
  * Routing mechanism
@@ -331,7 +357,7 @@ extern long long g_graph_p2pmess; /*		P2P messages sent during execution of Grap
 /*
  * Misrouting types at port level:
  * -LOCAL
- * -LOCAL_MM
+ * -LOCAL_MM use in VALIANT for local hop in src_group if destination sw is on source group
  * -GLOBAL
  * -GLOBAL_MANDATORY
  * -VALIANT (this is not truly at port level, but helps to record statistics)
@@ -362,6 +388,14 @@ enum MisrouteType {
  * 		random path across an intermediate group linked to
  * 		the source router or a neighbor router in the source
  * 		group, depending on the global misrouting policy.
+ * -ACOR: Adaptive Congestion Oblivious Routing, chooses a random path following
+ *              the next sequence:
+ *              - chooses a random group linked to the source router
+ *              - chooses a random node in a group linked to a neighbord router in the source group
+ *          Needs DALLY as deadlock avoidance mechanism.
+ *          Needs a _RECOMP ValiantType.
+ *          Uses a restricted version of Global Misrouting policy on each case.
+ * -PB_ACOR: PiggyBacking using ACOR for the non-minimal path.
  * -SRC_ADP: SouRCe ADaPtive non-minimal routing,
  * 		selects between the minimal and a non-minimal path
  * 		at injection based on the occupancy of remote queues
@@ -392,13 +426,42 @@ enum MisrouteType {
  *		dependencies and thus become deadlock-free. Needs DALLY
  *		as deadlock avoidance mechanism (although it is not used like that).
  * -OLM: Opportunistic Local Misrouting, ???? Needs DALLY as deadlock avoidance mechanism.
- *
+ * -CAR: Continuosly Adaptive Routing, similar to OLM but with simpler
+ * 		misrouting decisions: it decides between a (set at injection) Valiant
+ * 		route and the minimal path either at injection, at the source group
+ * 		after a minimal local hop, or at the intermediate group before reaching
+ * 		Valiant node. Decision is based on the occupancy of the minimal and
+ * 		nonminimal queues and two parameters, a factor and a threshold.
  */
 enum RoutingType {
-	MIN, MIN_COND, VAL, VAL_ANY, OBL, SRC_ADP, PAR, UGAL, PB, PB_ANY, OFAR, RLM, OLM
+	MIN, MIN_COND, VAL, VAL_ANY, OBL, ACOR, PB_ACOR, SRC_ADP, PAR, UGAL, PB, PB_ANY, OFAR, RLM, OLM, CAR
 };
 
 extern RoutingType g_routing;
+
+/***
+ * Type of Valiant routing (VALIANT and VALIANT_LOCAL misrouting types)
+ * - FULL: intermediate sw can be in source and destination group
+ * - *SRCEXC: intermediate sw can not be in source group (legacy default)
+ * - DSTEXC: intermediate sw can not be in destination group (not implemented)
+ * - SRCDSTEXC: intermediate sw could not be in source or destination group (not implemented)
+ * -          *_RECOMP: allow the recomputation of the intermediate sw
+ */
+enum ValiantType {
+	FULL, SRCEXC, DSTEXC, SRCDSTEXC,
+        FULL_RECOMP, SRCEXC_RECOMP, DSTEXC_RECOMP, SRCDSTEXC_RECOMP
+};
+
+extern ValiantType g_valiant_type;
+
+/***
+ * Type of Valiant misrouting destination used in OBL routing
+ * - GROUP : same as VAL
+ * - *SWITCH : same as VAL_ANY
+ */
+enum valiantMisroutingDestination { GROUP, NODE };
+
+extern valiantMisroutingDestination g_valiant_misrouting_destination;
 
 extern int g_ugal_local_threshold;
 extern int g_ugal_global_threshold;
@@ -406,6 +469,48 @@ extern int g_piggyback_coef;
 extern int g_th_min;
 extern bool g_reset_val; /*	Recalculate VAL node with SRC_ADP/OBL routing at injection if at the previous cycle
  *									has not advanced through non-minimal route */
+
+/***
+ * Status of Adaptive Congestion Oblivious Routing for each packet/switch
+ * - None: flit just generated - only used for packets, switch starts on CRGLGr
+ * - CRGLGr: Current Router Global Limited Group - misrouted hops: 1 global
+ * - CRGLSw: Current Router Global Limited Switch - misrouted hops: 1 global + 1 local
+ * - RRGLSw: Random Router Global Limited Switch - misrouted hops: 1 local + 1 global + 1 local
+ */
+enum acorState {None, CRGLGr, CRGLSw, RRGLSw};
+
+/***
+ * ACOR state management per:
+ * - PACKET.*: the state of each packet is controlled individually
+ * - *SWITCH.*: each switch has a minimum ACOR state and each packet takes this as a minimum. To
+ * change the status of the switch, a hysteresis cycle is used. Note than a packet could be 
+ * routed with a status bigger than the minimum state imposed by switch.
+ * .* can be the following options:
+ * -- *CGCSRS: CRGLGr <--> CRGLSw <--> RRGLSw
+ * -- CGRS: CRGLGr <--> RRGLSw
+ * -- CSRS: CRGLSw <--> RRGLSw
+ */
+enum acorStateManagement {PACKETCGCSRS, PACKETCGRS, PACKETCSRS, SWITCHCGCSRS, SWITCHCGRS, SWITCHCSRS};
+
+extern acorStateManagement g_acor_state_management;
+
+/***
+ * Parameters to control ACOR per switch management hysteresis cycle
+ * - acor_hysteresis_cycle_duration_cycles : Duration of each hysteresis cycle on switch cycles
+ * - acor_inc_state_first_th_packets : Minimum number of packets blocked during the hysteresis cycle to 
+ * trigger the change to second status.
+ * - acor_dec_state_first_th_packets : Maximum number of packets blocked during the hysteresis cycle to
+ * trigger the change from second status to first.
+ * - acor_inc_state_second_th_packets : Minimum number of packets blocked during the hysteresis cycle to 
+ * trigger the change from second status to third.
+ * - acor_dec_state_second_th_packets : Maximum number of packets blocked during the hysteresis cycle to
+ * trigger the change from third status to second.
+ */
+extern int g_acor_hysteresis_cycle_duration_cycles;
+extern int g_acor_inc_state_first_th_packets;
+extern int g_acor_dec_state_first_th_packets;
+extern int g_acor_inc_state_second_th_packets;
+extern int g_acor_dec_state_second_th_packets;
 
 /*
  * VC usage:
@@ -417,9 +522,11 @@ extern bool g_reset_val; /*	Recalculate VAL node with SRC_ADP/OBL routing at inj
  * 		first), keeping a possible increasing VC path, whereas
  * 		followed or not. Further detailed in flexible_routing.h
  * 		This routing can have different allocation mechanisms.
+ * -Table-based FlexVC: identical to Flexible in concept, but determining the VC based on tables rather than
+ * 		algorithms.
  */
 enum VcUsageType {
-	BASE, FLEXIBLE
+	BASE, FLEXIBLE, TBFLEX
 };
 extern VcUsageType g_vc_usage;
 
@@ -464,9 +571,13 @@ extern int g_vc_misrouting_congested_restriction_th; /* 		VC Misrouting addition
  * 		misrouting through global links):
  * -CRG: Current Router Global, global link for misrouting is chosen
  * 		randomly among those in current router.
+ * -CRG_L: CRG if destination group is not the same as source, in this case,
+ *         selects one random local to make a misrouting hop.
  * -RRG: Random Router Global, global link is chosen randomly among
  * 		any global link in any router at the source group (this is,
  * 		it selects link towards a group selected at random).
+ * -RRG_L: RRG if destination group is not the same as source, in this case,
+ *         select one random local to make a misrouting hop.
  * -NRG: Neighbor Router Global, a neighbor router in the group is
  * 		randomly chosen, and a global link is randomly chosen among
  * 		those in that router. This explicitly forbids those global
@@ -506,12 +617,12 @@ extern GlobalMisroutingPolicy g_global_misrouting;
  * 		triggering misrouting based on credits or counters
  * 		(whichever happens first) but exploiting the scheme of
  * 		partial counters shared amongst all routers of any group.
- * -WEIGTHED_CA: equal to CA, but weighting contention counter
+ * -WEIGHTED_CA: equal to CA, but weighting contention counter
  * 		when considering misrouting port candidates, to make
  * 		low contention port more eager to be selected.
  */
 enum MisroutingTrigger {
-	CA, CGA, HYBRID, FILTERED, DUAL, CA_REMOTE, HYBRID_REMOTE, WEIGTHED_CA
+	CA, CGA, HYBRID, FILTERED, DUAL, CA_REMOTE, HYBRID_REMOTE, WEIGHTED_CA
 };
 
 extern MisroutingTrigger g_misrouting_trigger;
@@ -526,9 +637,16 @@ extern MisroutingTrigger g_misrouting_trigger;
  * 		at some point of their path).
  * -PER_VC_MIN: identical to PER_PORT_MIN, but considering
  * 		the VC buffer instead of the whole port.
+ * -PER_GROUP: checks those VCs that can be used for
+ *		packets at their source group.
+ * -HISTORY_WINDOW: tracks the congestion values for the
+ * 		last previous cycles, a la Cascade.
+ * -HISTORY_WINDOW_AVG: same as HISTORY_WINDOW, but comparing
+ * 		the occupancy in the minimal queue against the
+ * 		average of all the ports in the current router
  */
 enum CongestionDetection {
-	PER_PORT, PER_VC, PER_PORT_MIN, PER_VC_MIN
+	PER_PORT, PER_VC, PER_PORT_MIN, PER_VC_MIN, PER_GROUP, HISTORY_WINDOW, HISTORY_WINDOW_AVG
 };
 
 extern CongestionDetection g_congestion_detection;
@@ -556,6 +674,10 @@ extern int g_contention_aware_global_th; /* This is used to determine whether to
  *											 in the case of CA_REMOTE misrouting trigger */
 extern bool g_increaseContentionAtHeader;	//TODO: is it useful to increase contention at header???
 extern float g_filtered_contention_regressive_coefficient;
+extern float g_car_misroute_factor; /*		Factor for misrouting decision in flexOppRouting */
+extern float g_car_misroute_th; /*			Threshold (in flits) for misrouting decision in flexOppRouting */
+extern int g_local_window_size; /*			Size of the congestion window, when HISTORY_WINDOW detection is used */
+extern int g_global_window_size;
 
 /***
  * Deadlock Avoidance mechanism (used with non- deadlock-free routings)
@@ -596,18 +718,69 @@ extern int g_channels_escape;
 
 /*
  * Congestion Management mechanism (used when deadlock avoidance is done
- * 		through a escape subnetwork):
+ * 		through a escape subnetwork and for 802.1Qau):
  * -BCM: Base Congestion Management, employs a bubble. ??
  * -ECM: Escape Congestion Management, employs a threshold value. ??
+ * -PAUSE: Per priority flow control mechanism (employs credits for determine the status of ports)
+ * -QCNSW: Congestion management which leverages QCN messages for change routing - Reaction point in switches.
  */
 enum CongestionManagement {
-	BCM, ECM
+	BCM, ECM, PAUSE, QCNSW
 };
 
 extern CongestionManagement g_congestion_management;
 
 extern int g_baseCongestionControl_bub; /*	Control Bubble in BCM */
 extern int g_escapeCongestion_th; /* 		Escape Threshold in ECM */
+
+/* Quantized Congestion Notification - 802.1Qau */
+extern float g_qcn_gd; /* Multiplied times the QCN field reveived in a CNM to decrease target rate */
+extern int g_qcn_bc_limit; /* Byte count limit for one cycle */
+extern float g_qcn_timer_period; /* Time limit for one cycle */
+extern float g_qcn_r_ai; /* The rate, in % of injection probability, used to increase target rate in the AI phase */
+extern float g_qcn_r_hai; /* The rate, in % of injection probability, used to increase target rate in the HAI phase */
+extern int g_qcn_fast_recovery_th; /* Number of cycles in fast recovery phase */
+extern float g_qcn_min_rate; /* The minimun rate accepted for rate limiters, expressed as % of injection probability */
+extern unsigned int g_qcn_q_eq; /* The reference point of a queue. QCN aims to keep the queue occupancy at this level */
+extern float g_qcn_w; /* Weight to be given to the change in queue length in the calculation of feedback value */
+extern float g_qcn_c; /* The speed of a link where a rate limiter is installed expressed as % of injection probability  */
+extern long long g_qcn_queue_length; /* QCN link queue size in phits */
+extern unsigned int g_qcn_cp_sampling_interval; /* Switch occupancy sampling interval - Occupancy sampling for terabit cee switches */
+extern int g_qcn_port; /* Port for sending CNM - last port of switch */
+extern int g_qcn_th1; /* avg + th1 set start point at which the min probability is increased */
+extern int g_qcn_th2; /* avg + th2 set start point at which the min probability is reduced */
+extern int g_qcn_cnms_percent; /* % of QCN CNMs sent */
+extern float ***g_qcn_g0_port_enroute_min_prob; /* PortEnruteMinProb for switches of group zero during whole simulation */
+extern bool g_qcn_transient_stats; /* Enable or disable qcn transient stats for group 0 */
+extern int ***g_qcn_g0_port_congestion; /* Fb value ports of switches of group zero during whole simulation */
+
+/*
+ * QCNSW alternative implementations:
+ * -QCNSWBASE: Reaction point in switch which receives the notification
+ * -QCNSWOUT: Reaction point in switch and sampling in output queues
+ * -QCNSWFBCOMP: QCNSWBASE + feedback comparison between ports
+ * -QCNSWOUTFBCOMP: QCNSWOUT + feedback comparison between ports
+ * -QCNSWSELF: CP notifies to other node and reuse the same notification for adapt its routing table
+ * -QCNSWCOMPLETE: QCNSWBASE + QCNSWSELF + QCNSEFBCOMP
+ */
+enum QcnSwImplementation {
+	QCNSWBASE, QCNSWOUT, QCNSWFBCOMP, QCNSWOUTFBCOMP, QCNSWSELF, QCNSWCOMPLETE
+};
+
+extern QcnSwImplementation g_qcn_implementation;
+
+/*
+ * QCNSW policy to manipulate probability:
+ * -AIMD : Additive increase - Multiplicative decrease (default)
+ * -AIAD : Additive increase - Additive decrease
+ * -MIMD : Multiplicative increase - Multiplicative decrease
+ * -MIAD : Multiplicative decrease - Additive decrease
+ */
+enum QcnSwPolicy {
+    AIMD, AIAD, MIMD, MIAD
+};
+
+extern QcnSwPolicy g_qcn_policy;
 
 /***
  * (Mis)Routing / Flow-Control Mechanism / Deadlock prevention (all mixed)
@@ -640,10 +813,18 @@ extern vector<long long> g_latency_histogram_other_global_misroute;
 
 /* Transmitted and received flits*/
 extern long long g_tx_flit_counter;
+extern long long g_tx_cnmFlit_counter;
+extern long long g_tx_flit_counter_printC;
 extern long long g_rx_flit_counter;
+extern long long g_rx_cnmFlit_counter;
+extern long long g_rx_acorState_counter[];
+extern long long g_rx_flit_counter_printC;
 extern long long g_attended_flit_counter;
 extern long long g_tx_warmup_flit_counter;
+extern long long g_tx_warmup_cnmFlit_counter;
 extern long long g_rx_warmup_flit_counter;
+extern long long g_rx_warmup_cnmFlit_counter;
+extern long long g_rx_warmup_acorState_counter[];
 extern long long g_response_counter;
 extern long long g_response_warmup_counter;
 extern long long g_nonminimal_counter;
@@ -661,6 +842,8 @@ extern long long g_local_misrouted_flit_counter[];
 extern int *g_transient_record_flits;
 extern int *g_transient_record_misrouted_flits;
 extern long long ***g_group0_numFlits;
+extern int **g_acor_group0_sws_packets_blocked;
+extern int **g_acor_group0_sws_status;
 extern long long *g_groupRoot_numFlits;
 extern float *g_transient_net_injection_latency;
 extern float *g_transient_net_injection_inj_latency;
@@ -715,9 +898,13 @@ extern unsigned int g_served_petitions;
 extern unsigned int g_injection_petitions;
 extern unsigned int g_served_injection_petitions;
 extern long long g_max_injection_packets_per_sw;
+extern long long g_max_injection_cnmPackets_per_sw;
 extern int g_sw_with_max_injection_pkts;
+extern int g_sw_with_max_injection_cnmPkts;
 extern long long g_min_injection_packets_per_sw;
+extern long long g_min_injection_cnmPackets_per_sw;
 extern int g_sw_with_min_injection_pkts;
+extern int g_sw_with_min_injection_cnmPkts;
 extern int g_transient_record_len;
 extern int g_transient_record_num_cycles;
 extern int g_transient_record_num_prev_cycles;

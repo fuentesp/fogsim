@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -75,6 +75,7 @@ flitModule* burstGenerator::generateFlit(FlitType flitType, int destId) {
 		destLabel = destId;
 		destSwitch = int(destLabel / g_p_computing_nodes_per_router);
 		genFlit = new flitModule(m_packet_id, g_tx_flit_counter, 0, sourceLabel, destLabel, destSwitch, 0, true, true);
+		switchM->routing->setValNode(genFlit);
 		genFlit->channel = this->getInjectionVC(destLabel, flitType);
 		genFlit->flitType = flitType;
 	} else {
@@ -120,6 +121,7 @@ flitModule* burstGenerator::generateFlit(FlitType flitType, int destId) {
 				}
 				genFlit = new flitModule(m_packet_id, g_tx_flit_counter, m_flitSeq, sourceLabel, destLabel, destSwitch,
 						0, 0, 0);
+				switchM->routing->setValNode(genFlit);
 				genFlit->channel = m_injVC;
 				genFlit->flitType = flitType;
 				if (m_flitSeq == (g_flits_per_packet - 1)) genFlit->tail = 1;

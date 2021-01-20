@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -29,6 +29,8 @@
 #include <math.h>
 #include <sstream>
 #include <iomanip>
+#include <string>
+#include <cmath>
 using namespace std;
 
 int module(int a, int b) {
@@ -97,16 +99,25 @@ int main(int argc, char *argv[]) {
 			g_max_injection_packets_per_sw = g_switches_list[i]->packetsInj;
 			g_sw_with_max_injection_pkts = g_switches_list[i]->label;
 		}
+		if (g_switches_list[i]->cnmPacketsInj > g_max_injection_cnmPackets_per_sw) {
+			g_max_injection_cnmPackets_per_sw = g_switches_list[i]->cnmPacketsInj;
+			g_sw_with_max_injection_cnmPkts = g_switches_list[i]->label;
+		}
 	}
 	g_min_injection_packets_per_sw = g_max_injection_packets_per_sw;
+	g_min_injection_cnmPackets_per_sw = g_max_injection_cnmPackets_per_sw;
 	for (i = 0; i < g_number_switches; i++) {
 		if (g_switches_list[i]->packetsInj < g_min_injection_packets_per_sw) {
 			g_min_injection_packets_per_sw = g_switches_list[i]->packetsInj;
 			g_sw_with_min_injection_pkts = g_switches_list[i]->label;
 		}
+		if (g_switches_list[i]->cnmPacketsInj < g_min_injection_cnmPackets_per_sw) {
+			g_min_injection_cnmPackets_per_sw = g_switches_list[i]->cnmPacketsInj;
+			g_sw_with_min_injection_cnmPkts = g_switches_list[i]->label;
+		}
 	}
 	assert(g_min_injection_packets_per_sw <= g_max_injection_packets_per_sw);
-
+	assert(g_min_injection_cnmPackets_per_sw <= g_max_injection_cnmPackets_per_sw);
 	cout << "Write output" << endl;
 	writeOutput();
 
@@ -114,8 +125,19 @@ int main(int argc, char *argv[]) {
 		writeLatencyHistogram(g_output_file_name);
 		writeHopsHistogram(g_output_file_name);
 		writeGeneratorsInjectionProbability(g_output_file_name);
+		if (g_congestion_management == QCNSW) if (g_qcn_transient_stats) {
+			writeQcnPortEnruteMinProbability(g_output_file_name);
+			writeQcnPortCongestionValue(g_output_file_name);
+		}
 	}
 	if (g_transient_stats) writeTransientOutput(g_output_file_name);
+	if (g_traffic == RANDOMPERMUTATION) writeDestMap(g_output_file_name);
+    if (g_routing == ACOR || g_routing == PB_ACOR) {
+        writeAcorGroup0SwsPacketsBlocked(g_output_file_name);
+        if (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS ||
+                g_acor_state_management == SWITCHCSRS) 
+            writeAcorGroup0SwsStatus(g_output_file_name);
+    }
 
 	freeMemory();
 
@@ -133,7 +155,7 @@ void readConfiguration(int argc, char *argv[]) {
 	char * filename = argv[1];
 	int i, j, total_trace_nodes;
 	string value;
-	vector<string> list_values;
+	vector < string > list_values;
 	ConfigFile config;
 
 	/* Open configuration file */
@@ -155,11 +177,14 @@ void readConfiguration(int argc, char *argv[]) {
 	}
 
 	/* Initialize auxiliar parameters */
+        //TODO Implement an indeterminate number of phases in this kind of traffic
 	g_phase_traffic_adv_dist = new int[3];
+        g_phase_traffic_probability = new float[3];
 	g_phase_traffic_type = new TrafficType[3];
 	g_phase_traffic_percent = new int[3];
 	for (i = 0; i < 3; i++) {
 		g_phase_traffic_adv_dist[i] = 1;
+        g_phase_traffic_probability[i] = 0;
 		g_phase_traffic_type[i] = UN;
 		g_phase_traffic_percent[i] = 0;
 	}
@@ -249,7 +274,7 @@ void readConfiguration(int argc, char *argv[]) {
 
 	g_channels = (g_injection_channels > g_local_link_channels) ? g_injection_channels : g_local_link_channels;
 	if (g_global_link_channels > g_channels) g_channels = g_global_link_channels;
-	if (g_vc_usage == FLEXIBLE) {
+	if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX) {
 		g_channels = g_local_link_channels + g_global_link_channels;
 		if (config.getKeyValue("CONFIG", "VcAllocation", value) == 0) readVcAlloc(value.c_str(), &g_vc_alloc);
 	}
@@ -325,7 +350,10 @@ void readConfiguration(int argc, char *argv[]) {
 	/* Class of service levels */
 	if (config.getKeyValue("CONFIG", "CosLevels", value) == 0) {
 		g_cos_levels = atoi(value.c_str());
-		assert(g_cos_levels > 0 && g_cos_levels < 9);
+		assert(
+				g_cos_levels > 0
+						&& ((g_congestion_management != QCNSW && g_cos_levels < 9)
+								|| (g_congestion_management == QCNSW && g_cos_levels < 8)));
 	}
 
 	/* Traffic pattern */
@@ -344,6 +372,15 @@ void readConfiguration(int argc, char *argv[]) {
 			g_reactive_traffic = true;
 			g_traffic = BURSTY_UN;
 			break;
+		case HOTREGION_RCTV:
+			g_reactive_traffic = true;
+			g_traffic = HOTREGION;
+			break;
+		case RANDOMPERMUTATION_RCTV:
+			g_reactive_traffic = true;
+			g_traffic = RANDOMPERMUTATION;
+			break;
+			// Only use this switch for the reactive traffic types
 	}
 
 	/* Reactive traffic patterns need to have initial injection probability halved because
@@ -354,7 +391,7 @@ void readConfiguration(int argc, char *argv[]) {
 		g_injection_probability /= 2;
 		assert(g_routing != OFAR); /* Currently OFAR does not support reactive traffic due to the use of VCs that is hard-coded into the OFAR class */
 		/* With Flexible VC usage, we need to set the number of VCs reserved for the responses */
-		if (g_vc_usage == FLEXIBLE) {
+		if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX) {
 			assert(config.getKeyValue("CONFIG", "LocalResChannels", value) == 0);
 			g_local_res_channels = atoi(value.c_str());
 			assert(config.getKeyValue("CONFIG", "GlobalResChannels", value) == 0);
@@ -381,6 +418,10 @@ void readConfiguration(int argc, char *argv[]) {
 			break;
 		case ADVc:
 			break;
+		case oADV:
+			assert(config.getKeyValue("CONFIG", "AdvTrafficDistance", value) == 0);
+			g_adv_traffic_distance = atoi(value.c_str());
+			break;
 		case MIX:
 			assert(config.getKeyValue("CONFIG", "AdvTrafficDistance", value) == 0);
 			g_adv_traffic_distance = atoi(value.c_str());
@@ -397,7 +438,7 @@ void readConfiguration(int argc, char *argv[]) {
 		case TRANSIENT:
 			g_transient_stats = true;
 			assert(config.getKeyValue("CONFIG", "transientTrafficFirstPattern", value) == 0);
-			readTrafficPattern(value.c_str(), &g_phase_traffic_type[0]);
+            readTrafficPattern(value.c_str(), &g_phase_traffic_type[0]);
 			if (config.getKeyValue("CONFIG", "AdvTrafficDistance", value) == 0) {
 				g_phase_traffic_adv_dist[0] = atoi(value.c_str());
 			}
@@ -406,15 +447,16 @@ void readConfiguration(int argc, char *argv[]) {
 			if (config.getKeyValue("CONFIG", "transientTrafficNextDist", value) == 0) {
 				g_phase_traffic_adv_dist[1] = atoi(value.c_str()); //Shouldn't this be an obliged parameter? (since its value is taken when reading 2nd traffic pattern
 			}
-			assert(config.getKeyValue("CONFIG", "transientRecordCycles", value) == 0);
-			g_transient_record_num_cycles = atoi(value.c_str());
-			assert(g_transient_record_num_cycles > 0);
 			assert(config.getKeyValue("CONFIG", "transientTrafficCycle", value) == 0);
 			g_transient_traffic_cycle = atoi(value.c_str());
-			assert(config.getKeyValue("CONFIG", "transientRecordPrevCycles", value) == 0);
-			g_transient_record_num_prev_cycles = atoi(value.c_str());
-			assert(g_transient_record_num_prev_cycles > 0);
-			g_transient_record_len = g_transient_record_num_cycles + g_transient_record_num_prev_cycles;
+            if (config.getKeyValue("CONFIG", "transientTrafficFirstProbability", value) == 0)
+                g_phase_traffic_probability[0] = atof(value.c_str());
+            else
+                g_phase_traffic_probability[0] = g_injection_probability;
+            if (config.getKeyValue("CONFIG", "transientTrafficSecondProbability", value) == 0)
+                g_phase_traffic_probability[1] = atof(value.c_str());
+            else
+                g_phase_traffic_probability[1] = g_injection_probability;
 			break;
 		case ALL2ALL:
 			g_injection_probability = 100;
@@ -559,17 +601,6 @@ void readConfiguration(int argc, char *argv[]) {
 			g_num_traces = atoi(value.c_str());
 			assert(g_num_traces > 0); //Current code doesn't support more than two trace files
 
-			if (config.getKeyValue("CONFIG", "trackTempStats", value) == 0) {
-				g_transient_stats = atoi(value.c_str());
-				assert(config.getKeyValue("CONFIG", "transientRecordCycles", value) == 0);
-				g_transient_record_num_cycles = atoi(value.c_str());
-				assert(g_transient_record_num_cycles > 0);
-				assert(config.getKeyValue("CONFIG", "transientRecordPrevCycles", value) == 0);
-				g_transient_record_num_prev_cycles = atoi(value.c_str());
-				assert(g_transient_record_num_prev_cycles > 0);
-				g_transient_record_len = g_transient_record_num_cycles + g_transient_record_num_prev_cycles;
-			}
-
 			/* Depending on the number of different traces employed, one or other function
 			 * will be used to determine variable values. */
 			if (g_num_traces == 1) {
@@ -652,6 +683,26 @@ void readConfiguration(int argc, char *argv[]) {
 			}
 
 			break;
+		case HOTREGION:
+			if (config.getKeyValue("CONFIG", "PercentTrafficToCongest", value) == 0) {
+				g_percent_traffic_to_congest = atoi(value.c_str());
+				assert(g_percent_traffic_to_congest > 0 && g_percent_traffic_to_congest < 100);
+			}
+			if (config.getKeyValue("CONFIG", "PercentNodesIntoRegion", value) == 0) {
+				g_percent_nodes_into_region = atof(value.c_str());
+				assert(g_percent_nodes_into_region > 0.0 && g_percent_nodes_into_region < 100.0);
+			}
+			break;
+		case HOTSPOT:
+			if (config.getKeyValue("CONFIG", "PercentTrafficToCongest", value) == 0) {
+				g_percent_traffic_to_congest = atoi(value.c_str());
+				assert(g_percent_traffic_to_congest > 0 && g_percent_traffic_to_congest < 100);
+			}
+			if (config.getKeyValue("CONFIG", "HotspotNode", value) == 0) {
+				g_hotspot_node = atoi(value.c_str());
+				assert(g_hotspot_node >= 0 && g_hotspot_node < (g_number_generators - 1));
+			}
+			break;
 		default:
 			break;
 	}
@@ -730,19 +781,87 @@ void readConfiguration(int argc, char *argv[]) {
 		/* If deadlock avoidance mechanism is a escape subnetwork,
 		 a congestion management mechanism can be used */
 		if (config.getKeyValue("CONFIG", "CongestionManagement", value) == 0) {
-			if (strcmp(value.c_str(), "BCM") == 0) {
-				g_congestion_management = BCM;
-				assert(config.getKeyValue("CONFIG", "baseCongestionControl_bub", value) == 0);
-				g_baseCongestionControl_bub = atoi(value.c_str());
-			} else if (strcmp(value.c_str(), "ECM") == 0) {
-				g_congestion_management = ECM;
-				assert(config.getKeyValue("CONFIG", "escapeCongestion_th", value) == 0);
-				g_escapeCongestion_th = atoi(value.c_str());
-				assert((g_escapeCongestion_th >= 0) && (g_escapeCongestion_th <= 100));
-			} else {
-				cerr << "ERROR: UNRECOGNISED CONGESTION MANAGEMENT MECHANISM!" << endl;
-				exit(0);
+			readCongestionManagement(value.c_str(), &g_congestion_management);
+			switch (g_congestion_management) {
+				case BCM:
+					assert(config.getKeyValue("CONFIG", "baseCongestionControl_bub", value) == 0);
+					g_baseCongestionControl_bub = atoi(value.c_str());
+					break;
+				case ECM:
+					assert(config.getKeyValue("CONFIG", "escapeCongestion_th", value) == 0);
+					g_escapeCongestion_th = atoi(value.c_str());
+					assert((g_escapeCongestion_th >= 0) && (g_escapeCongestion_th <= 100));
+					break;
+				case QCNSW:
+				case PAUSE:
+					cerr << "ERROR: this congestion mechanism is not supported for RING deadlock avoidance" << endl;
+					break;
+				default:
+					cerr << "ERROR: UNRECOGNISED CONGESTION MANAGEMENT MECHANISM!" << endl;
+					exit (EXIT_FAILURE);
 			}
+		}
+	}
+
+	/* Read congestion management configuration */
+	if (config.getKeyValue("CONFIG", "CongestionManagement", value) == 0) {
+		readCongestionManagement(value.c_str(), &g_congestion_management);
+		switch (g_congestion_management) {
+			case PAUSE: /* Pause 802.3x */
+				break;
+			case QCNSW:
+				assert(config.getKeyValue("CONFIG", "QCNSW_IMPLEMENTATION", value) == 0);
+				readQCNSWImplementation(value.c_str(), &g_qcn_implementation);
+				assert(config.getKeyValue("CONFIG", "QCNSW_POLICY", value) == 0);
+				readQCNSWPolicy(value.c_str(), &g_qcn_policy);
+				assert(config.getKeyValue("CONFIG", "QCN_Q_EQ", value) == 0);
+				g_qcn_q_eq = atoi(value.c_str());
+				assert(config.getKeyValue("CONFIG", "QCNSamplingInterval", value) == 0);
+				g_qcn_cp_sampling_interval = atoi(value.c_str());
+				assert(config.getKeyValue("CONFIG", "QCN_BC_LIMIT", value) == 0);
+				g_qcn_bc_limit = atoi(value.c_str());
+				assert(config.getKeyValue("CONFIG", "QCN_R_AI", value) == 0);
+				g_qcn_r_ai = atof(value.c_str());
+				assert(config.getKeyValue("CONFIG", "QCN_MIN_RATE", value) == 0);
+				g_qcn_min_rate = atof(value.c_str());
+				if (config.getKeyValue("CONFIG", "QCN_W", value) == 0) g_qcn_w = atof(value.c_str());
+				if (config.getKeyValue("CONFIG", "QCN_GD", value) == 0) g_qcn_gd = atof(value.c_str());
+				if (config.getKeyValue("CONFIG", "QCNQueueLength", value) == 0)
+					g_qcn_queue_length = atoi(value.c_str());
+				if (config.getKeyValue("CONFIG", "QCNThreshold1", value) == 0) g_qcn_th1 = atoi(value.c_str());
+				if (config.getKeyValue("CONFIG", "QCNThreshold2", value) == 0) g_qcn_th2 = atoi(value.c_str());
+				if (config.getKeyValue("CONFIG", "QCNCNMsPercent", value) == 0)
+					g_qcn_cnms_percent = atoi(value.c_str());
+				if (config.getKeyValue("CONFIG", "QCNG0Transient", value) == 0)
+					if (atoi(value.c_str()) == 1) g_qcn_transient_stats = true;
+				/* QCN port is the last port of the switch */
+				g_qcn_port = g_p_computing_nodes_per_router + g_a_routers_per_group - 1 + g_h_global_ports_per_router;
+				// Ports minimal probability
+				g_qcn_g0_port_enroute_min_prob = new float**[g_max_cycles + g_warmup_cycles];
+				for (int i = 0; i < g_max_cycles + g_warmup_cycles; i++) {
+					g_qcn_g0_port_enroute_min_prob[i] = new float*[g_a_routers_per_group];
+					for (int j = 0; j < g_a_routers_per_group; j++) {
+						g_qcn_g0_port_enroute_min_prob[i][j] = new float[g_a_routers_per_group - 1
+								+ g_h_global_ports_per_router];
+						for (int z = 0; z < g_a_routers_per_group - 1 + g_h_global_ports_per_router; z++)
+							g_qcn_g0_port_enroute_min_prob[i][j][z] = -1;
+					}
+				}
+				// Ports fb congestion value
+				g_qcn_g0_port_congestion = new int**[g_max_cycles + g_warmup_cycles];
+				for (int i = 0; i < g_max_cycles + g_warmup_cycles; i++) {
+					g_qcn_g0_port_congestion[i] = new int*[g_a_routers_per_group];
+					for (int j = 0; j < g_a_routers_per_group; j++) {
+						g_qcn_g0_port_congestion[i][j] = new int[g_p_computing_nodes_per_router + g_a_routers_per_group
+								- 1 + g_h_global_ports_per_router];
+						for (int z = 0;
+								z
+										< g_p_computing_nodes_per_router + g_a_routers_per_group - 1
+												+ g_h_global_ports_per_router; z++)
+							g_qcn_g0_port_congestion[i][j][z] = -1;
+					}
+				}
+				break;
 		}
 	}
 
@@ -765,9 +884,122 @@ void readConfiguration(int argc, char *argv[]) {
 			break;
 		case OBL:
 			assert(g_deadlock_avoidance == DALLY);
-			if (config.getKeyValue("CONFIG", "ResetValNode", value) == 0)
+			// Read the type of valiant
+			if (config.getKeyValue("CONFIG", "ValiantType", value) == 0)
+				readValiantType(value.c_str(), &g_valiant_type);
+			else
+				cerr
+						<< "WARNING: using default legacy value SRCEXC for ValiantType, in future this will be changed to FULL."
+						<< endl;
+            //TODO crosscheck that performance with srcAdp using this option set to Group/Node is equivalent to Pb/PbAny.
+            //TODO Same for obl and Val/ValAny. If so, remove old routing mechanisms and rewrite dgflySimulator to remap to new routing options (backward-compatible).
+            // Read valiant misrouting destination
+            if (config.getKeyValue("CONFIG", "ValiantMisroutingDestination", value) == 0)
+                readValiantMisroutingDestination(value.c_str(), &g_valiant_misrouting_destination);
+			// Read legacy reset variable
+			if (config.getKeyValue("CONFIG", "ResetValNode", value) == 0) {
+				cerr
+						<< "WARNING: deprecated parameter: ResetValNode. This parameter should be replaced by a ValiantType parameter with/without the _RECOMP ending."
+						<< endl;
 				g_reset_val = atoi(value.c_str());
+				if ((g_reset_val == false
+						&& (g_valiant_type == FULL_RECOMP || g_valiant_type == SRCEXC_RECOMP
+								|| g_valiant_type == DSTEXC_RECOMP || g_valiant_type == SRCDSTEXC_RECOMP))
+						|| (g_reset_val && config.getKeyValue("CONFIG", "ValiantType", value) == 0
+								&& (g_valiant_type == FULL || g_valiant_type == SRCEXC || g_valiant_type == DSTEXC
+										|| g_valiant_type == SRCDSTEXC))) {
+					cerr
+							<< "ERROR: the ResetValNode parameter (which is deprecated) does not match the type of Valiant routing"
+							<< endl;
+					exit(0);
+				}
+			}
+			switch (g_valiant_type) {
+				case FULL:
+					break;
+				case SRCEXC:
+					break;
+				case FULL_RECOMP:
+					g_reset_val = true;
+					g_valiant_type = FULL;
+					break;
+				case SRCEXC_RECOMP:
+					g_reset_val = true;
+					g_valiant_type = SRCEXC;
+					break;
+					// Not implemented cases
+				case DSTEXC_RECOMP:
+				case SRCDSTEXC_RECOMP:
+				case DSTEXC:
+				case SRCDSTEXC:
+				default:
+					cerr << "ERROR: Not implemented ValiantType" << endl;
+					assert(0);
+			}
 			break;
+        case PB_ACOR:
+            assert(config.getKeyValue("CONFIG", "CongestionDetection", value) == 0);
+            readCongestionDetection(value.c_str(), &g_congestion_detection);
+            assert(config.getKeyValue("CONFIG", "piggybacking_coef", value) == 0);
+            g_piggyback_coef = atoi(value.c_str());
+            assert(g_piggyback_coef > 0);
+            if (config.getKeyValue("CONFIG", "ugal_global_threshold", value) == 0)
+                g_ugal_global_threshold = atoi(value.c_str());
+            if (config.getKeyValue("CONFIG", "ugal_local_threshold", value) == 0)
+                g_ugal_local_threshold = atoi(value.c_str());
+            // Skip break to continue with ACOR parameters
+        case ACOR:
+            assert(g_deadlock_avoidance == DALLY);
+            // Read the type of valiant
+            if (config.getKeyValue("CONFIG", "ValiantType", value) == 0)
+                readValiantType(value.c_str(), &g_valiant_type);
+            else
+                cerr << "WARNING: using default legacy value SRCEXC_RECOMP for ValiantType, in future this will be changed to FULL_RECOMP." << endl;
+            // Assert a _RECOMP routing selection
+            switch (g_valiant_type) {
+                case FULL:
+                case SRCEXC:
+                    cerr << "WARNING: _RECOMP ValiantType mandatory" << endl;
+                    assert(false);
+                    break;
+                case FULL_RECOMP:
+                    g_reset_val = true;
+                    g_valiant_type = FULL;
+                    break;
+                case SRCEXC_RECOMP:
+                    g_reset_val = true;
+                    g_valiant_type = SRCEXC;
+                    break;
+                    // Not implemented cases
+                case DSTEXC_RECOMP:
+                case SRCDSTEXC_RECOMP:
+                case DSTEXC:
+                case SRCDSTEXC:
+                default:
+                    cerr << "ERROR: Not implemented ValiantType" << endl;
+                    assert(false);
+            }
+            // Read ACOR state management option
+            assert(config.getKeyValue("CONFIG", "acorStateManagement", value) == 0);
+            readACORStateManagement(value.c_str(), &g_acor_state_management);
+            switch (g_acor_state_management) { // Read ACOR hysteresys cycle parameters
+                case SWITCHCGCSRS:
+                    assert(config.getKeyValue("CONFIG", "acorInc2Packets", value) == 0);
+                    g_acor_inc_state_second_th_packets = atoi(value.c_str());
+                    assert(config.getKeyValue("CONFIG", "acorDec2Packets", value) == 0);
+                    g_acor_dec_state_second_th_packets = atoi(value.c_str());
+                    assert(g_acor_inc_state_second_th_packets > g_acor_dec_state_second_th_packets);
+                case SWITCHCGRS:
+                case SWITCHCSRS:
+                    assert(config.getKeyValue("CONFIG", "acorHystCycles", value) == 0);
+                    g_acor_hysteresis_cycle_duration_cycles = atoi(value.c_str());
+                    assert(config.getKeyValue("CONFIG", "acorInc1Packets", value) == 0);
+                    g_acor_inc_state_first_th_packets = atoi(value.c_str());
+                    assert(config.getKeyValue("CONFIG", "acorDec1Packets", value) == 0);
+                    g_acor_dec_state_first_th_packets = atoi(value.c_str());
+                    assert(g_acor_inc_state_first_th_packets > g_acor_dec_state_first_th_packets);
+            }
+            break;
 		case PAR:
 			assert(g_deadlock_avoidance == DALLY);
 			assert(config.getKeyValue("CONFIG", "MisroutingTrigger", value) == 0);
@@ -782,8 +1014,50 @@ void readConfiguration(int argc, char *argv[]) {
 		case SRC_ADP:
 			assert(config.getKeyValue("CONFIG", "CongestionDetection", value) == 0);
 			readCongestionDetection(value.c_str(), &g_congestion_detection);
-			if (config.getKeyValue("CONFIG", "ResetValNode", value) == 0)
+			// Read the type of valiant
+			if (config.getKeyValue("CONFIG", "ValiantType", value) == 0)
+				readValiantType(value.c_str(), &g_valiant_type);
+			else
+				cerr
+						<< "WARNING: using default legacy value SRCEXC for ValiantType, in future this will be changed to FULL."
+						<< endl;
+			// Read legacy reset variable
+			if (config.getKeyValue("CONFIG", "ResetValNode", value) == 0) {
 				g_reset_val = atoi(value.c_str());
+				if ((g_reset_val == false
+						&& (g_valiant_type == FULL_RECOMP || g_valiant_type == SRCEXC_RECOMP
+								|| g_valiant_type == DSTEXC_RECOMP || g_valiant_type == SRCDSTEXC_RECOMP))
+						|| (g_reset_val && config.getKeyValue("CONFIG", "ValiantType", value) == 0
+								&& (g_valiant_type == FULL || g_valiant_type == SRCEXC || g_valiant_type == DSTEXC
+										|| g_valiant_type == SRCDSTEXC))) {
+					cerr
+							<< "ERROR: the ResetValNode parameter (which is deprecated) does not match the type of Valiant routing"
+							<< endl;
+					exit(0);
+				}
+			}
+			switch (g_valiant_type) {
+				case FULL:
+					break;
+				case SRCEXC:
+					break;
+				case FULL_RECOMP:
+					g_reset_val = true;
+					g_valiant_type = FULL;
+					break;
+				case SRCEXC_RECOMP:
+					g_reset_val = true;
+					g_valiant_type = SRCEXC;
+					break;
+					// Not implemented cases
+				case DSTEXC_RECOMP:
+				case SRCDSTEXC_RECOMP:
+				case DSTEXC:
+				case SRCDSTEXC:
+				default:
+					cerr << "ERROR: Not implemented ValiantType" << endl;
+					assert(0);
+			}
 		case PB:
 		case PB_ANY:
 			assert(g_deadlock_avoidance == DALLY);
@@ -817,6 +1091,21 @@ void readConfiguration(int argc, char *argv[]) {
 			if (config.getKeyValue("CONFIG", "OFAR_misrouting_local", value) == 0) {
 			}
 			break;
+		case CAR:
+			assert(config.getKeyValue("CONFIG", "MisrouteFactor", value) == 0);
+			g_car_misroute_factor = atof(value.c_str());
+			assert(config.getKeyValue("CONFIG", "MisrouteTh", value) == 0);
+			g_car_misroute_th = atof(value.c_str());
+			if (config.getKeyValue("CONFIG", "CongestionDetection", value) == 0)
+				readCongestionDetection(value.c_str(), &g_congestion_detection);
+			if (g_congestion_detection == HISTORY_WINDOW || g_congestion_detection == HISTORY_WINDOW_AVG) {
+				assert(config.getListValues("CONFIG", "WindowSize", list_values) == 0);
+				assert(list_values.size() == 2);
+				g_local_window_size = atoi(list_values[0].c_str());
+				g_global_window_size = atoi(list_values[1].c_str());
+			}
+			if (config.getKeyValue("CONFIG", "ResetValNode", value) == 0) g_reset_val = atoi(value.c_str());
+			break;
 		default: /* An unrecognized routing type should not be used */
 			assert(0);
 			break;
@@ -843,7 +1132,7 @@ void readConfiguration(int argc, char *argv[]) {
 				assert(config.getKeyValue("CONFIG", "VcMisroutingCongestedRestrictionThreshold", value) == 0);
 				g_vc_misrouting_congested_restriction_th = atoi(value.c_str());
 			case DUAL:
-			case WEIGTHED_CA:
+			case WEIGHTED_CA:
 			case CA:
 				g_contention_aware = 1;
 				assert(g_routing == PAR || g_routing == RLM || g_routing == OLM);
@@ -933,6 +1222,18 @@ void readConfiguration(int argc, char *argv[]) {
 
 	if (config.getKeyValue("CONFIG", "PrintHists", value) == 0) g_print_hists = atoi(value.c_str());
 
+	/* If transient statistics are requested (or transient traffic is used) check their length */
+	if (config.getKeyValue("CONFIG", "trackTempStats", value) == 0) g_transient_stats = atoi(value.c_str());
+	if (g_transient_stats) {
+		assert(config.getKeyValue("CONFIG", "transientRecordCycles", value) == 0);
+		g_transient_record_num_cycles = atoi(value.c_str());
+		assert(g_transient_record_num_cycles > 0);
+		assert(config.getKeyValue("CONFIG", "transientRecordPrevCycles", value) == 0);
+		g_transient_record_num_prev_cycles = atoi(value.c_str());
+		assert(g_transient_record_num_prev_cycles >= 0);
+		g_transient_record_len = g_transient_record_num_cycles + g_transient_record_num_prev_cycles;
+	}
+
 	if (config.getKeyValue("CONFIG", "forceMisrouting", value) == 0) {
 		g_forceMisrouting = atoi(value.c_str());
 	}
@@ -947,11 +1248,24 @@ void readConfiguration(int argc, char *argv[]) {
 		g_issue_parallel_reqs = atoi(value.c_str());
 	}
 
+	/* PAUSE implementation restrictions */
+	if (g_congestion_management == PAUSE) assert(g_routing == MIN_COND);
+
 	if (config.getListValues("CONFIG", "VerboseSwitches", list_values) == 0) {
 		for (i = 0; i < list_values.size(); i++)
 			g_verbose_switches.insert(atoi(list_values[i].c_str()));
-		if (config.getKeyValue("CONFIG", "VerboseCycles", value) == 0)
-			g_verbose_cycles = atoi(value.c_str());
+		if (config.getKeyValue("CONFIG", "VerboseCycles", value) == 0) g_verbose_cycles = atoi(value.c_str());
+	}
+
+	/* QCN implementation restrictions */
+	if (g_congestion_management == QCNSW) {
+		assert(g_buffer_type == SEPARATED);
+		assert(g_routing == MIN_COND);
+		assert(g_vc_usage == BASE);
+		assert(g_packet_size == g_flit_size);
+		assert(g_cos_levels >= 2);
+		assert(g_switch_type != IOQ_SW | (g_switch_type == IOQ_SW && g_segregated_flows == 1));
+		assert(g_qcn_implementation != QCNSWOUT || (g_qcn_implementation == QCNSWOUT && g_switch_type == IOQ_SW));
 	}
 
 	/* All config values have been loaded, let config descriptor be removed */
@@ -1009,6 +1323,24 @@ void createNetwork() {
 		}
 		g_group0_totalLatency[i] = 0;
 	}
+    if (g_routing == ACOR || g_routing == PB_ACOR) {    
+        g_acor_group0_sws_packets_blocked = new int*[g_a_routers_per_group];
+        if (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS ||
+                g_acor_state_management == SWITCHCSRS)
+            g_acor_group0_sws_status = new int*[g_a_routers_per_group];
+        for (int i = 0; i < g_a_routers_per_group; i++) {
+            g_acor_group0_sws_packets_blocked[i] = new int[g_max_cycles + g_warmup_cycles];
+            if (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS ||
+                g_acor_state_management == SWITCHCSRS)
+                g_acor_group0_sws_status[i] = new int[g_max_cycles + g_warmup_cycles];
+            for (long long c = 0; c < g_max_cycles + g_warmup_cycles; c++) {
+                g_acor_group0_sws_packets_blocked[i][c] = 0;
+                if (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS ||
+                g_acor_state_management == SWITCHCSRS)
+                    g_acor_group0_sws_status[i][c] = -1;
+            }
+        }
+    }
 
 	g_groupRoot_numFlits = new long long[g_a_routers_per_group];
 	g_groupRoot_totalLatency = new long double[g_a_routers_per_group];
@@ -1032,6 +1364,7 @@ void createNetwork() {
 			}
 			break;
 		case FLEXIBLE:
+		case TBFLEX:
 			for (i = 0; i < (g_a_routers_per_group - 1 + g_h_global_ports_per_router); i++) {
 				g_vc_counter.push_back(vector<long long>(g_local_link_channels + g_global_link_channels, 0));
 			}
@@ -1044,7 +1377,15 @@ void createNetwork() {
 	cout << "switchModule size: " << sizeof(switchModule) << endl;
 	cout << "generatorModule size: " << sizeof(generatorModule) << endl;
 
-	if (g_vc_usage == FLEXIBLE) g_channels = g_local_link_channels + g_global_link_channels;
+	if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX) g_channels = g_local_link_channels + g_global_link_channels;
+	// Fill a list with all generators, in use only by RANDOMPERMUTATION traffics to select the destinations for generators
+	if (g_traffic == RANDOMPERMUTATION || g_traffic == RANDOMPERMUTATION_RCTV)
+		for (i = 0; i < ((g_h_global_ports_per_router * g_a_routers_per_group) + 1); i++)
+			for (j = 0; j < (g_a_routers_per_group); j++)
+				for (k = 0; k < g_p_computing_nodes_per_router; k++)
+					g_available_generators.push_back(
+							k + j * g_p_computing_nodes_per_router
+									+ i * (g_p_computing_nodes_per_router * g_a_routers_per_group));
 	for (i = 0; i < ((g_h_global_ports_per_router * g_a_routers_per_group) + 1); i++) {
 		for (j = 0; j < (g_a_routers_per_group); j++) {
 			try {
@@ -1062,8 +1403,8 @@ void createNetwork() {
 						exit(0);
 				}
 			} catch (exception& e) {
-				g_output_file << "Error making switchModule, i= " << i << ", j=" << j;
-				cerr << "Error making switchModule, i= " << i << ", j=" << j;
+				g_output_file << "Error making switchModule, i=" << i << ", j=" << j << endl;
+				cerr << "Error making switchModule, i=" << i << ", j=" << j << endl;
 				exit(0);
 			}
 			for (k = 0; k < g_p_computing_nodes_per_router; k++) {
@@ -1168,6 +1509,7 @@ void action() {
 	/* WARMUP execution [only for synthetic traffic] */
 	if (g_traffic != TRACE && g_traffic != GRAPH500) {
 		for (g_cycle = 0; g_cycle < g_warmup_cycles; g_cycle++) {
+			print_cycle = g_cycle % 100;
 			if (g_switch_type == BASE_SW) g_internal_cycle = g_cycle;
 			for (i = 0; i < g_number_switches; i++) {
 				if (g_congestion_management == ECM) g_switches_list[i]->escapeCongested();
@@ -1177,10 +1519,21 @@ void action() {
 			for (i = 0; i < g_number_generators; i++) {
 				g_generators_list[i]->action();
 			}
-			if (g_cycle % g_print_cycles == 0) {
+			if (print_cycle == 0) {
+				cout.precision(5);
 				cout << "cycle:" << setfill(' ') << setw(8) << g_cycle << "\tMessages sent:" << setfill(' ') << setw(12)
 						<< g_tx_flit_counter << "\tMessages received:" << setfill(' ') << setw(12) << g_rx_flit_counter
-						<< endl;
+						<< "\tApplied load: " << setfill(' ')
+						<< (float) (1.0 * g_tx_flit_counter - g_tx_flit_counter_printC) * g_flit_size
+								/ (1.0 * g_number_generators * 100) << "\tAccepted load: " << setfill(' ')
+						<< (float) (1.0 * g_rx_flit_counter - g_rx_flit_counter_printC) * g_flit_size
+								/ (1.0 * g_number_generators * 100) << endl;
+				g_tx_flit_counter_printC = g_tx_flit_counter;
+				g_rx_flit_counter_printC = g_rx_flit_counter;
+				if (g_congestion_management == QCNSW)
+					cout << "cycle:" << setfill(' ') << setw(8) << g_cycle << "\tCNMs sent    :" << setfill(' ')
+							<< setw(12) << g_tx_cnmFlit_counter << "\tCNMs received    :" << setfill(' ') << setw(12)
+							<< g_rx_cnmFlit_counter << endl;
 			}
 		}
 	}
@@ -1217,7 +1570,11 @@ void action() {
 		g_switches_list[i]->resetQueueOccupancy();
 	}
 	g_tx_warmup_flit_counter = g_tx_flit_counter;
+	g_tx_warmup_cnmFlit_counter = g_tx_cnmFlit_counter;
 	g_rx_warmup_flit_counter = g_rx_flit_counter;
+	g_rx_warmup_cnmFlit_counter = g_rx_cnmFlit_counter;
+        for (int acorStatus = None; acorStatus <= RRGLSw; acorStatus++)
+            g_rx_warmup_acorState_counter[acorStatus] = g_rx_acorState_counter[acorStatus];
 	g_tx_warmup_packet_counter = g_tx_packet_counter;
 	g_rx_warmup_packet_counter = g_rx_packet_counter;
 	g_warmup_flit_latency = g_flit_latency;
@@ -1229,7 +1586,14 @@ void action() {
 	g_nonminimal_warmup_src = g_nonminimal_src;
 	g_nonminimal_warmup_int = g_nonminimal_int;
 	cout << "=== Cycle:" << g_cycle << "\tWarmup Flits Sent: " << setw(12) << g_tx_warmup_flit_counter
-			<< "\tWarmup Flits Received: " << setw(12) << g_rx_warmup_flit_counter << " ===" << endl;
+			<< "\tWarmup Flits Received: " << setw(12) << g_rx_warmup_flit_counter << "\tApplied Load: "
+			<< (float) (1.0 * g_tx_warmup_flit_counter) * g_flit_size / (1.0 * g_number_generators * g_cycle)
+			<< "\tAccepted Load: "
+			<< (float) (1.0 * g_rx_warmup_flit_counter) * g_flit_size / (1.0 * g_number_generators * g_cycle) << " ==="
+			<< endl;
+	if (g_congestion_management == QCNSW)
+		cout << "=== Cycle:" << g_cycle << "\tWarmup CNMs Sent : " << setw(12) << g_tx_warmup_cnmFlit_counter
+				<< "\tWarmup CNMs Received : " << setw(12) << g_rx_warmup_cnmFlit_counter << " ===" << endl;
 
 	/* Reset petition statistics */
 	g_petitions = 0;
@@ -1240,6 +1604,7 @@ void action() {
 	/* Simulation AFTER warmup */
 	if (g_traffic != TRACE && g_traffic != GRAPH500) {
 		for (; g_cycle < (g_max_cycles + g_warmup_cycles); g_cycle++) {
+			print_cycle = g_cycle % 100;
 			if (g_switch_type == BASE_SW) g_internal_cycle = g_cycle;
 			for (i = 0; i < g_number_switches; i++) {
 				if (g_congestion_management == ECM) g_switches_list[i]->escapeCongested();
@@ -1251,10 +1616,20 @@ void action() {
 			for (i = 0; i < g_number_generators; i++) {
 				if (!g_generators_list[i]->switchM->escapeNetworkCongested) g_generators_list[i]->action();
 			}
-			if (g_cycle % g_print_cycles == 0) {
+			if (print_cycle == 0) {
 				cout << "cycle:" << setfill(' ') << setw(8) << g_cycle << "\tMessages sent:" << setfill(' ') << setw(12)
 						<< g_tx_flit_counter << "\tMessages received:" << setfill(' ') << setw(12) << g_rx_flit_counter
-						<< endl;
+						<< "\tApplied load: " << setfill(' ') << setw(4)
+						<< (float) (1.0 * g_tx_flit_counter - g_tx_flit_counter_printC) * g_flit_size
+								/ (1.0 * g_number_generators * 100) << "\tAccepted load: " << setfill(' ') << setw(4)
+						<< (float) (1.0 * g_rx_flit_counter - g_rx_flit_counter_printC) * g_flit_size
+								/ (1.0 * g_number_generators * 100) << endl;
+				g_tx_flit_counter_printC = g_tx_flit_counter;
+				g_rx_flit_counter_printC = g_rx_flit_counter;
+				if (g_congestion_management == QCNSW)
+					cout << "cycle:" << setfill(' ') << setw(8) << g_cycle << "\tCNMs sent    :" << setfill(' ')
+							<< setw(12) << g_tx_cnmFlit_counter << "\tCNMs received    :" << setfill(' ') << setw(12)
+							<< g_rx_cnmFlit_counter << endl;
 			}
 
 			/* BURST and ALL2ALL patterns end when all messages have been received */
@@ -1348,6 +1723,7 @@ void action() {
 			}
 
 			if (normal) {
+				print_cycle = g_cycle % 5000;
 				for (i = 0; i < g_event_deadlock.size(); i++) {
 					for (j = 0; j < g_event_deadlock[i].size(); j++) {
 						if (g_event_deadlock[i][j] > 2000000) {
@@ -1381,7 +1757,7 @@ void action() {
 					if (g_switches_list[i]->messagesInQueuesCounter >= 1) {
 						g_switches_list[i]->action();
 					} else {
-						if (g_routing == PB || g_routing == PB_ANY || g_routing == SRC_ADP) {
+						if (g_routing == PB || g_routing == PB_ANY || g_routing == SRC_ADP || g_routing == PB_ACOR) {
 							g_switches_list[i]->updateReadPb();
 						}
 						if (g_contention_aware) {
@@ -1426,9 +1802,12 @@ void action() {
 				/* All trace instances have finished once or more times: simulation must be ended at this point */
 				go_on = trace_ended ? false : true;
 
-				if (g_cycle % g_print_cycles == 0) {
+				if (print_cycle == 0) {
 					cout << "cycle:" << g_cycle << "   Messages sent:" << g_tx_flit_counter << "   Messages received:"
 							<< g_rx_flit_counter << endl;
+					if (g_congestion_management == QCNSW)
+						cout << "cycle:" << g_cycle << "   CNMs sent:" << g_tx_cnmFlit_counter << "   CNMs received:"
+								<< g_rx_cnmFlit_counter << endl;
 				}
 			}
 		}
@@ -1467,9 +1846,8 @@ void writeOutput() {
 
 	if (g_reactive_traffic) {
 		g_injection_probability *= 2;
-		for (int i = 0; i < g_number_generators; i++) {
+		for (int i = 0; i < g_number_generators; i++)
 			g_generators_list[i]->sum_injection_probability *= 2;
-		}
 		switch (g_traffic) {
 			case UN:
 				g_traffic = UN_RCTV;
@@ -1479,6 +1857,12 @@ void writeOutput() {
 				break;
 			case BURSTY_UN:
 				g_traffic = BURSTY_UN_RCTV;
+				break;
+			case HOTREGION:
+				g_traffic = HOTREGION_RCTV;
+				break;
+			case RANDOMPERMUTATION:
+				g_traffic = RANDOMPERMUTATION_RCTV;
 				break;
 		}
 	}
@@ -1547,9 +1931,9 @@ void writeOutput() {
 	g_output_file << "Injection Delay: " << g_injection_delay << endl;
 	g_output_file << "Local Link Delay: " << g_local_link_transmission_delay << endl;
 	g_output_file << "Global Link Delay: " << g_global_link_transmission_delay << endl;
-	g_output_file << "Packet Size: " << g_packet_size << " phits" << endl;
-	g_output_file << "Flit Size: " << g_flit_size << " phits" << endl;
-	g_output_file << "Packet Flit Size: " << g_flits_per_packet << " flits" << endl;
+	g_output_file << "Packet Size (in phits): " << g_packet_size << endl;
+	g_output_file << "Flit Size (in phits): " << g_flit_size << endl;
+	g_output_file << "Packet Size (in Flits): " << g_flits_per_packet << endl;
 	g_output_file << "Generator Queue Length: " << g_injection_queue_length << endl;
 	switch (g_buffer_type) {
 		case SEPARATED:
@@ -1575,19 +1959,31 @@ void writeOutput() {
 			break;
 	}
 	g_output_file << "VCs: " << g_channels << endl;
-	g_output_file << "Injection VCs: " << g_injection_channels << endl;
 	g_output_file << "Local Link VCs: " << g_local_link_channels << endl;
 	g_output_file << "Global Link VCs: " << g_global_link_channels << endl;
+	g_output_file << "Injection VCs: " << g_injection_channels << endl;
+	switch (g_vc_injection) {
+		case DEST:
+			g_output_file << "Injection VC policy: DEST" << endl;
+			break;
+		case RAND:
+			g_output_file << "Injection VC policy: RANDOM" << endl;
+			break;
+	}
 	g_output_file << "Seed: " << g_seed << endl;
 	g_output_file << "Palm Tree Configuration: " << g_palm_tree_configuration << endl << endl << endl;
 	g_output_file << "Latency Histogram Max Lat: " << g_latency_histogram_maxLat << endl;
 	g_output_file << "Hops Histogram Max Hops: " << g_hops_histogram_maxHops << endl;
 	if (g_local_arbiter_speedup > 0) g_output_file << "Input Speedup: " << g_local_arbiter_speedup << endl;
 	if (g_issue_parallel_reqs) g_output_file << "Parallel Req Issuing: 1" << endl;
-	if (g_cos_levels > 1) g_output_file << "CoS Levels: " << g_cos_levels << endl;
+	g_output_file << "CoS Levels: " << g_cos_levels << endl;
 
 	//Traffic pattern employed
-	g_output_file << "Injection Probability: " << g_injection_probability << endl;
+    if (g_traffic == TRANSIENT && g_injection_probability != g_phase_traffic_probability[0])
+        g_output_file << "Injection Probability: " << g_phase_traffic_probability[0] <<
+                "-" << g_phase_traffic_probability[1] << endl;
+    else
+        g_output_file << "Injection Probability: " << g_injection_probability << endl;
 
 	switch (g_traffic) {
 		case UN:
@@ -1608,14 +2004,18 @@ void writeOutput() {
 		case ADVc:
 			g_output_file << "Traffic: ADVc" << endl;
 			break;
+		case oADV:
+			g_output_file << "Traffic: oADV" << endl;
+			g_output_file << "Adversarial Traffic Distance: " << g_adv_traffic_distance << endl;
+			break;
 		case ALL2ALL:
 			g_output_file << "Traffic: ALL2ALL" << endl;
 			if (g_random_AllToAll)
 				g_output_file << "All2All Random" << endl;
 			else
 				g_output_file << "All2All Naive" << endl;
-			g_output_file << "All2All Length: " << (g_number_generators - 1) * g_phases << " packets" << endl;
-			g_output_file << "All2All Length: " << (g_number_generators - 1) * g_phases * g_flits_per_packet << " flits"
+			g_output_file << "All2All Length (packets): " << (g_number_generators - 1) * g_phases << endl;
+			g_output_file << "All2All Length (flits): " << (g_number_generators - 1) * g_phases * g_flits_per_packet
 					<< endl;
 			g_output_file << "All2All Phases: " << g_phases << endl;
 			g_output_file << "All2All End Cycle: " << g_cycle << endl;
@@ -1631,8 +2031,8 @@ void writeOutput() {
 			break;
 		case SINGLE_BURST:
 			g_output_file << "Traffic: SINGLE_BURST" << endl;
-			g_output_file << "Burst Length: " << (g_single_burst_length / g_flits_per_packet) << " packets" << endl;
-			g_output_file << "Burst Length: " << g_single_burst_length << " flits" << endl;
+			g_output_file << "Burst Length (packets): " << (g_single_burst_length / g_flits_per_packet) << endl;
+			g_output_file << "Burst Length (flits): " << g_single_burst_length << endl;
 			for (i = 0; i < 3; i++) {
 				switch (g_phase_traffic_type[i]) {
 					case UN:
@@ -1658,9 +2058,11 @@ void writeOutput() {
 		case TRANSIENT:
 			g_output_file << "Traffic: TRANSIENT" << endl;
 			g_output_file << "Transient First Pattern: " << g_phase_traffic_type[0] << endl;
-			g_output_file << "First Pattern Adv Distance: " << g_phase_traffic_adv_dist[0];
+            g_output_file << "Transient First Probability: " << g_phase_traffic_probability[0] << endl;
+			g_output_file << "First Pattern Adv Distance: " << g_phase_traffic_adv_dist[0] << endl;
 			g_output_file << "First Pattern End Cycle: " << g_transient_traffic_cycle << endl;
 			g_output_file << "Transient Second Pattern: " << g_phase_traffic_type[1] << endl;
+            g_output_file << "Transient Second Probability: " << g_phase_traffic_probability[1] << endl;
 			g_output_file << "Second Pattern Adv Distance: " << g_phase_traffic_adv_dist[1] << endl;
 			g_output_file << "Transient Record Cycles: " << g_transient_record_num_cycles << endl;
 			g_output_file << "Transient Record Prev Cycles: " << g_transient_record_num_prev_cycles << endl;
@@ -1751,6 +2153,31 @@ void writeOutput() {
 				g_output_file << ", " << g_graph_tree_level[i];
 			g_output_file << endl;
 			break;
+		case HOTREGION:
+			g_output_file << "Traffic: HOTREGION" << endl;
+			g_output_file << "Percent traffic to congest: " << g_percent_traffic_to_congest << endl;
+			g_output_file << "Percent nodes into region: " << g_percent_nodes_into_region << endl;
+			g_output_file << "Effective nodes into region: (0,"
+					<< ceil(g_number_generators * g_percent_nodes_into_region / 100) - 1 << ")" << endl;
+			break;
+		case HOTREGION_RCTV:
+			g_output_file << "Traffic: HOTREGION_RCTV" << endl;
+			g_output_file << "Percent traffic to congest: " << g_percent_traffic_to_congest << endl;
+			g_output_file << "Percent nodes into region: " << g_percent_nodes_into_region << endl;
+			g_output_file << "Effective nodes into region: (0,"
+					<< ceil(g_number_generators * g_percent_nodes_into_region / 100) - 1 << ")" << endl;
+			break;
+		case HOTSPOT:
+			g_output_file << "Traffic: HOTSPOT" << endl;
+			g_output_file << "Percent traffic to congest: " << g_percent_traffic_to_congest << endl;
+			g_output_file << "Hotspot node: " << g_hotspot_node << endl;
+			break;
+		case RANDOMPERMUTATION:
+			g_output_file << "Traffic: RANDOMPERMUTATION" << endl;
+			break;
+		case RANDOMPERMUTATION_RCTV:
+			g_output_file << "Traffic: RANDOMPERMUTATION_RCTV" << endl;
+			break;
 		default:
 			g_output_file << "Traffic: UNKNOWN!!!! (" << g_traffic << ")" << endl;
 	}
@@ -1811,16 +2238,212 @@ void writeOutput() {
 		case OBL:
 			g_output_file << "Routing: OBL" << endl;
 			g_output_file << "Reset VAL node: " << g_reset_val << endl;
-			break;
+			switch (g_valiant_type) {
+				case FULL:
+					g_output_file << "Valiant type: FULL";
+					break;
+				case SRCEXC:
+					g_output_file << "Valiant type: SRCEXC";
+					break;
+				case DSTEXC:
+					g_output_file << "Valiant type: DSTEXC";
+					break;
+				case SRCDSTEXC:
+					g_output_file << "Valiant type: SRCDSTEXC";
+					break;
+			}
+			if (g_reset_val) g_output_file << "_RECOMP";
+			g_output_file << endl;
+            switch(g_valiant_misrouting_destination) {
+                case GROUP:
+                    g_output_file << "Valiant misrouting destination: GROUP" << endl;
+                    break;
+                case NODE:
+                    g_output_file << "Valiant misrouting destination: NODE" << endl;
+                    break;
+            }
+            break;
+        case ACOR:
+            g_output_file << "Routing: ACOR" << endl;
+            g_output_file << "Reset VAL node: " << g_reset_val << endl;
+            switch (g_valiant_type) {
+                case FULL:
+                    g_output_file << "Valiant type: FULL";
+                    break;
+                case SRCEXC:
+                    g_output_file << "Valiant type: SRCEXC";
+                    break;
+                case DSTEXC:
+                    g_output_file << "Valiant type: DSTEXC";
+                    break;
+                case SRCDSTEXC:
+                    g_output_file << "Valiant type: SRCDSTEXC";
+                    break;
+            }
+            if (g_reset_val) g_output_file << "_RECOMP";
+            g_output_file << endl;
+            switch (g_acor_state_management) {
+                case PACKETCGCSRS:
+                    g_output_file << "ACOR state management: PACKETCGCSRS" << endl;
+                    break;
+                case PACKETCGRS:
+                    g_output_file << "ACOR state management: PACKETCGRS" << endl;
+                    break;
+                case PACKETCSRS:
+                    g_output_file << "ACOR state management: PACKETCSRS" << endl;
+                    break;
+                case SWITCHCGCSRS:
+                    g_output_file << "ACOR state management: SWITCHCGCSRS" << endl;
+                    g_output_file << "ACOR hysteresis duration: " << g_acor_hysteresis_cycle_duration_cycles << " cycles" << endl;
+                    g_output_file << "ACOR increment 1 th: " << g_acor_inc_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 1 th: " << g_acor_dec_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR increment 2 th: " << g_acor_inc_state_second_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 2 th: " << g_acor_dec_state_second_th_packets << " packets" << endl;
+                    break;
+                case SWITCHCGRS:
+                    g_output_file << "ACOR state management: SWITCHCGRS" << endl;
+                    g_output_file << "ACOR hysteresis duration: " << g_acor_hysteresis_cycle_duration_cycles << " cycles" << endl;
+                    g_output_file << "ACOR increment 1 th: " << g_acor_inc_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 1 th: " << g_acor_dec_state_first_th_packets << " packets" << endl;
+                    assert(g_rx_acorState_counter[CRGLSw] == 0);
+                    assert(g_rx_warmup_acorState_counter[CRGLSw] == 0);
+                    break;
+                case SWITCHCSRS:
+                    g_output_file << "ACOR state management: SWITCHCSRS" << endl;
+                    g_output_file << "ACOR hysteresis duration: " << g_acor_hysteresis_cycle_duration_cycles << " cycles" << endl;
+                    g_output_file << "ACOR increment 1 th: " << g_acor_inc_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 1 th: " << g_acor_dec_state_first_th_packets << " packets" << endl;
+                    assert(g_rx_acorState_counter[CRGLGr] == 0);
+                    assert(g_rx_warmup_acorState_counter[CRGLGr] == 0);
+                    break;
+            }
+            assert(g_rx_acorState_counter[None] == 0);
+            assert(g_rx_warmup_acorState_counter[None] == 0);
+            g_output_file << "% packets status CRGLGr: " <<
+                    (1.0 * (g_rx_acorState_counter[CRGLGr] - g_rx_warmup_acorState_counter[CRGLGr]) 
+                    / (g_rx_flit_counter - g_rx_warmup_flit_counter) * 100.0) <<
+                    " (warmup: " << 
+                    (1.0 * g_rx_warmup_acorState_counter[CRGLGr] / g_rx_warmup_flit_counter * 100.0) <<
+                    ")" << endl;
+            g_output_file << "% packets status CRGLSw: " <<
+                    (1.0 * (g_rx_acorState_counter[CRGLSw] - g_rx_warmup_acorState_counter[CRGLSw]) 
+                    / (g_rx_flit_counter - g_rx_warmup_flit_counter) * 100.0) <<
+                    " (warmup: " << 
+                    (1.0 * g_rx_warmup_acorState_counter[CRGLSw] / g_rx_warmup_flit_counter * 100.0) <<
+                    ")" << endl;
+            g_output_file << "% packets status RRGLSw: " <<
+                    (1.0 * (g_rx_acorState_counter[RRGLSw] - g_rx_warmup_acorState_counter[RRGLSw]) 
+                    / (g_rx_flit_counter - g_rx_warmup_flit_counter) * 100.0) <<
+                    " (warmup: " << 
+                    (1.0 * g_rx_warmup_acorState_counter[RRGLSw] / g_rx_warmup_flit_counter * 100.0) <<
+                    ")" << endl;
+            break;
+        case PB_ACOR:
+            g_output_file << "Routing: PB_ACOR" << endl;
+            g_output_file << "Reset VAL node: " << g_reset_val << endl;
+            switch (g_valiant_type) {
+                case FULL:
+                    g_output_file << "Valiant type: FULL";
+                    break;
+                case SRCEXC:
+                    g_output_file << "Valiant type: SRCEXC";
+                    break;
+                case DSTEXC:
+                    g_output_file << "Valiant type: DSTEXC";
+                    break;
+                case SRCDSTEXC:
+                    g_output_file << "Valiant type: SRCDSTEXC";
+                    break;
+            }
+            if (g_reset_val) g_output_file << "_RECOMP";
+            g_output_file << endl;
+            switch (g_acor_state_management) {
+                case PACKETCGCSRS:
+                    g_output_file << "ACOR state management: PACKETCGCSRS" << endl;
+                    break;
+                case PACKETCGRS:
+                    g_output_file << "ACOR state management: PACKETCGRS" << endl;
+                    break;
+                case PACKETCSRS:
+                    g_output_file << "ACOR state management: PACKETCSRS" << endl;
+                    break;
+                case SWITCHCGCSRS:
+                    g_output_file << "ACOR state management: SWITCHCGCSRS" << endl;
+                    g_output_file << "ACOR hysteresis duration: " << g_acor_hysteresis_cycle_duration_cycles << " cycles" << endl;
+                    g_output_file << "ACOR increment 1 th: " << g_acor_inc_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 1 th: " << g_acor_dec_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR increment 2 th: " << g_acor_inc_state_second_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 2 th: " << g_acor_dec_state_second_th_packets << " packets" << endl;
+                    break;
+                case SWITCHCGRS:
+                    g_output_file << "ACOR state management: SWITCHCGRS" << endl;
+                    g_output_file << "ACOR hysteresis duration: " << g_acor_hysteresis_cycle_duration_cycles << " cycles" << endl;
+                    g_output_file << "ACOR increment 1 th: " << g_acor_inc_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 1 th: " << g_acor_dec_state_first_th_packets << " packets" << endl;
+                    assert(g_rx_acorState_counter[CRGLSw] == 0);
+                    assert(g_rx_warmup_acorState_counter[CRGLSw] == 0);
+                    break;
+                case SWITCHCSRS:
+                    g_output_file << "ACOR state management: SWITCHCSRS" << endl;
+                    g_output_file << "ACOR hysteresis duration: " << g_acor_hysteresis_cycle_duration_cycles << " cycles" << endl;
+                    g_output_file << "ACOR increment 1 th: " << g_acor_inc_state_first_th_packets << " packets" << endl;
+                    g_output_file << "ACOR decrement 1 th: " << g_acor_dec_state_first_th_packets << " packets" << endl;
+                    assert(g_rx_acorState_counter[CRGLGr] == 0);
+                    assert(g_rx_warmup_acorState_counter[CRGLGr] == 0);
+                    break;
+            }
+            assert(g_rx_acorState_counter[None] == 0);
+            assert(g_rx_warmup_acorState_counter[None] == 0);
+            g_output_file << "% packets status CRGLGr: " <<
+                    (1.0 * (g_rx_acorState_counter[CRGLGr] - g_rx_warmup_acorState_counter[CRGLGr]) 
+                    / (g_rx_flit_counter - g_rx_warmup_flit_counter) * 100.0) <<
+                    " (warmup: " << 
+                    (1.0 * g_rx_warmup_acorState_counter[CRGLGr] / g_rx_warmup_flit_counter * 100.0) <<
+                    ")" << endl;
+            g_output_file << "% packets status CRGLSw: " <<
+                    (1.0 * (g_rx_acorState_counter[CRGLSw] - g_rx_warmup_acorState_counter[CRGLSw]) 
+                    / (g_rx_flit_counter - g_rx_warmup_flit_counter) * 100.0) <<
+                    " (warmup: " << 
+                    (1.0 * g_rx_warmup_acorState_counter[CRGLSw] / g_rx_warmup_flit_counter * 100.0) <<
+                    ")" << endl;
+            g_output_file << "% packets status RRGLSw: " <<
+                    (1.0 * (g_rx_acorState_counter[RRGLSw] - g_rx_warmup_acorState_counter[RRGLSw]) 
+                    / (g_rx_flit_counter - g_rx_warmup_flit_counter) * 100.0) <<
+                    " (warmup: " << 
+                    (1.0 * g_rx_warmup_acorState_counter[RRGLSw] / g_rx_warmup_flit_counter * 100.0) <<
+                    ")" << endl;
+            g_output_file << "Piggybacking Coef: " << g_piggyback_coef << endl;
+            g_output_file << "UGAL Local Threshold: " << g_ugal_local_threshold << endl;
+            g_output_file << "UGAL Global Threshold: " << g_ugal_global_threshold << endl;
+            break;
 		case SRC_ADP:
 			g_output_file << "Routing: SRC_ADP" << endl;
 			g_output_file << "Reset VAL node: " << g_reset_val << endl;
+			switch (g_valiant_type) {
+				case FULL:
+					g_output_file << "Valiant type: FULL";
+					break;
+				case SRCEXC:
+					g_output_file << "Valiant type: SRCEXC";
+					break;
+				case DSTEXC:
+					g_output_file << "Valiant type: DSTEXC";
+					break;
+				case SRCDSTEXC:
+					g_output_file << "Valiant type: SRCDSTEXC";
+					break;
+			}
+			if (g_reset_val) g_output_file << "_RECOMP";
+			g_output_file << endl;
 			g_output_file << "Piggybacking Coef: " << g_piggyback_coef << endl;
 			g_output_file << "UGAL Local Threshold: " << g_ugal_local_threshold << endl;
 			g_output_file << "UGAL Global Threshold: " << g_ugal_global_threshold << endl;
 			break;
 		case PAR:
 			g_output_file << "Routing: PAR" << endl;
+			g_output_file << "Local Threshold Percent: " << g_percent_local_threshold << endl;
+			g_output_file << "Global Threshold Percent: " << g_percent_global_threshold << endl;
+			g_output_file << "Threshold Min: " << g_th_min << endl;
 			break;
 		case UGAL:
 			g_output_file << "Routing: UGAL" << endl;
@@ -1855,6 +2478,12 @@ void writeOutput() {
 			g_output_file << "Threshold Min: " << g_th_min << endl;
 			g_output_file << "Restrict Local Cycles: " << g_restrictLocalCycles << endl;
 			break;
+		case CAR:
+			g_output_file << "Routing: CAR" << endl;
+			g_output_file << "Misroute Factor: " << g_car_misroute_factor << endl;
+			g_output_file << "Misroute Th: " << g_car_misroute_th << endl;
+			g_output_file << "Reset VAL node: " << g_reset_val << endl;
+			break;
 	}
 
 	switch (g_vc_usage) {
@@ -1878,14 +2507,33 @@ void writeOutput() {
 					break;
 			}
 			break;
+		case TBFLEX:
+			g_output_file << "VC usage: TBFLEX" << endl;
+			switch (g_vc_alloc) {
+				case HIGHEST_VC:
+					g_output_file << "VC Allocation: HIGHEST_VC" << endl;
+					break;
+				case LOWEST_VC:
+					g_output_file << "VC Allocation: LOWEST_VC" << endl;
+					break;
+				case LOWEST_OCCUPANCY:
+					g_output_file << "VC Allocation: CONGESTION_BASED" << endl;
+					break;
+				case RANDOM_VC:
+					g_output_file << "VC Allocation: RANDOM" << endl;
+					break;
+			}
+			break;
 	}
 
 	switch (g_routing) {
+		case CAR:
 		case OBL:
 		case OFAR:
 		case OLM:
 		case PAR:
 		case RLM:
+        case PB_ACOR:
 		case SRC_ADP:
 			switch (g_global_misrouting) {
 				case CRG:
@@ -1923,6 +2571,19 @@ void writeOutput() {
 				case PER_VC_MIN:
 					g_output_file << "Congestion Detection: PER_VC_MIN" << endl;
 					break;
+				case PER_GROUP:
+					g_output_file << "Congestion Detection: PER_GROUP" << endl;
+					break;
+				case HISTORY_WINDOW:
+					g_output_file << "Congestion Detection: HISTORY_WINDOW" << endl;
+					g_output_file << "Local Window Size: " << g_local_window_size << endl;
+					g_output_file << "Global Window Size: " << g_global_window_size << endl;
+					break;
+				case HISTORY_WINDOW_AVG:
+					g_output_file << "Congestion Detection: HISTORY_WINDOW_AVG" << endl;
+					g_output_file << "Local Window size: " << g_local_window_size << endl;
+					g_output_file << "Global Window Size: " << g_global_window_size << endl;
+					break;
 			}
 	}
 
@@ -1958,8 +2619,8 @@ void writeOutput() {
 				g_output_file << "Contention Local Threshold: " << g_contention_aware_local_th << endl;
 			g_output_file << "Increase Contention At Header: " << g_increaseContentionAtHeader << endl;
 			break;
-		case WEIGTHED_CA:
-			g_output_file << "Misrouting Trigger: WEIGTHED_CA" << endl;
+		case WEIGHTED_CA:
+			g_output_file << "Misrouting Trigger: WEIGHTED_CA" << endl;
 			g_output_file << "Contention Threshold: " << g_contention_aware_th << endl;
 			g_output_file << "Increase Contention At Header: " << g_increaseContentionAtHeader << endl;
 			break;
@@ -1991,6 +2652,63 @@ void writeOutput() {
 	g_output_file << "Force Misrouting: " << g_forceMisrouting << endl;
 	g_output_file << endl << endl;
 
+	/* IEEE 802.3x flow control */
+	if (g_congestion_management == PAUSE) {
+		g_output_file << "Congestion management: PAUSE" << endl;
+		g_output_file << endl << endl;
+	}
+
+	/* QCN Parameters */
+	if (g_congestion_management == QCNSW) {
+		g_output_file << "Congestion management: QCNSW" << endl;
+		switch (g_qcn_implementation) {
+			case QCNSWBASE:
+				g_output_file << "Implementation: BASE" << endl;
+				break;
+			case QCNSWOUT:
+				g_output_file << "Implementation: OUT" << endl;
+				break;
+			case QCNSWSELF:
+				g_output_file << "Implementation: SELF" << endl;
+				break;
+			case QCNSWCOMPLETE:
+				g_output_file << "Implementation: COMPLETE" << endl;
+				break;
+			case QCNSWFBCOMP:
+				g_output_file << "Implementation: FBCOMP" << endl;
+				break;
+			case QCNSWOUTFBCOMP:
+				g_output_file << "Implementation: OUTFBCOMP" << endl;
+				break;
+		}
+		g_output_file << "GD: " << g_qcn_gd << endl;
+		g_output_file << "BC_LIMIT: " << g_qcn_bc_limit << endl;
+		switch (g_qcn_policy) {
+			case AIMD:
+				g_output_file << "Policy: AIMD" << endl;
+				break;
+			case MIMD:
+				g_output_file << "Policy: MIMD" << endl;
+				break;
+			case AIAD:
+				g_output_file << "Policy: AIAD" << endl;
+				break;
+			case MIAD:
+				g_output_file << "Policy: MIAD" << endl;
+				break;
+		}
+		g_output_file << "R_AI: " << g_qcn_r_ai << endl;
+		g_output_file << "MIN_RATE: " << g_qcn_min_rate << endl;
+		g_output_file << "Q_EQ: " << g_qcn_q_eq << endl;
+		g_output_file << "W: " << g_qcn_w << endl;
+		g_output_file << "QCN port queue length: " << g_qcn_queue_length << endl;
+		g_output_file << "Occupancy sampling interval: " << g_qcn_cp_sampling_interval << endl;
+		g_output_file << "Threshold 1: " << g_qcn_th1 << endl;
+		g_output_file << "Threshold 2: " << g_qcn_th2 << endl;
+		g_output_file << "CNMs CP percent: " << g_qcn_cnms_percent << endl;
+		g_output_file << endl << endl;
+	}
+
 	/* Simulation statistics */
 	g_output_file << "STATISTICS" << endl;
 	g_output_file << "Phits Sent: " << (g_tx_flit_counter - g_tx_warmup_flit_counter) * g_flit_size << " (warmup: "
@@ -2000,15 +2718,16 @@ void writeOutput() {
 	g_output_file << "Flits Received: " << (g_rx_flit_counter - g_rx_warmup_flit_counter) << " (warmup: "
 			<< g_rx_warmup_flit_counter << ")" << endl;
 	long receivedFlitCount = g_rx_flit_counter - g_rx_warmup_flit_counter;
+	long receivedCnmFlitCount = g_rx_cnmFlit_counter - g_rx_warmup_cnmFlit_counter;
 	long receivedPacketCount = g_rx_packet_counter - g_rx_warmup_packet_counter;
 	g_output_file << "Packets Received: " << receivedPacketCount << endl;
 	if (g_reactive_traffic)
 		g_output_file << "Responses Received: " << (g_response_counter - g_response_warmup_counter) << endl;
 	g_output_file << "Non Minimally Routed Packets Received: " << (g_nonminimal_counter - g_nonminimal_warmup_counter)
 			<< endl;
-	g_output_file << "InjectionMisrouted Packets Received: " << (g_nonminimal_inj - g_nonminimal_warmup_inj) << endl;
-	g_output_file << "SrcGroupMisrouted Packets Received: " << (g_nonminimal_src - g_nonminimal_warmup_src) << endl;
-	g_output_file << "IntGroupMisrouted Packets Received: " << (g_nonminimal_int - g_nonminimal_warmup_int) << endl;
+	g_output_file << "InjectionMisrouted Packets: " << (g_nonminimal_inj - g_nonminimal_warmup_inj) << endl;
+	g_output_file << "SrcGroupMisrouted Packets: " << (g_nonminimal_src - g_nonminimal_warmup_src) << endl;
+	g_output_file << "IntGroupMisrouted Packets: " << (g_nonminimal_int - g_nonminimal_warmup_int) << endl;
 	for (i = 0; i < g_allocator_iterations; i++) {
 		g_output_file << "Flits Misrouted Iter " << i << ": "
 				<< (g_local_misrouted_flit_counter[i] + g_global_misrouted_flit_counter[i]) << " ("
@@ -2308,9 +3027,10 @@ void writeOutput() {
 	g_output_file << "Switch With Min Injections: " << g_sw_with_min_injection_pkts << endl;
 	g_output_file << "Unbalance Quotient: "
 			<< (float) 1.0 * g_max_injection_packets_per_sw / g_min_injection_packets_per_sw << endl;
-	double sum = 0, sqsum = 0;
+	double sum = 0, sqsum = 0, sumCnm = 0;
 	for (i = 0; i < g_number_switches; i++) {
 		sum += g_switches_list[i]->packetsInj;
+		sumCnm += g_switches_list[i]->cnmPacketsInj;
 		sqsum += pow(g_switches_list[i]->packetsInj, 2);
 	}
 	double mean = sum / g_number_switches;
@@ -2354,6 +3074,28 @@ void writeOutput() {
 			}
 		}
 	}
+	g_output_file << endl;
+	/* Quantized Congestion Notification statistics */
+	if (g_congestion_management == QCNSW) {
+		g_output_file << "QCN" << endl;
+		g_output_file << "QCN phits Sent: " << (g_tx_cnmFlit_counter - g_tx_warmup_cnmFlit_counter) * g_flit_size
+				<< " (warmup: " << g_tx_warmup_cnmFlit_counter * g_flit_size << ")" << endl;
+		g_output_file << "QCN flits Sent: " << (g_tx_cnmFlit_counter - g_tx_warmup_cnmFlit_counter) << " (warmup: "
+				<< g_tx_warmup_cnmFlit_counter << ")" << endl;
+		g_output_file << "QCN flits Received: " << (g_rx_cnmFlit_counter - g_rx_warmup_cnmFlit_counter) << " (warmup: "
+				<< g_rx_warmup_cnmFlit_counter << ")" << endl;
+		g_output_file << "QCN Applied Load: "
+				<< (float) (1.0 * g_tx_cnmFlit_counter - g_tx_warmup_cnmFlit_counter) * g_flit_size
+						/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
+		g_output_file << "QCN Accepted Load: "
+				<< (float) 1.0 * receivedCnmFlitCount * g_flit_size
+						/ (1.0 * g_number_generators * (g_cycle - g_warmup_cycles)) << " phits/(node·cycle)" << endl;
+		g_output_file << "Max CNM Injections: " << g_max_injection_cnmPackets_per_sw << endl;
+		g_output_file << "Switch With Max CNM Injections: " << g_sw_with_max_injection_cnmPkts << endl;
+		g_output_file << "Min CNM Injections: " << g_min_injection_cnmPackets_per_sw << endl;
+		g_output_file << "Switch With Min CNM Injections: " << g_sw_with_min_injection_cnmPkts << endl;
+		g_output_file << "Average CNM injections per sw: " << sumCnm / g_number_switches << endl;
+	}
 
 	g_output_file << endl;
 	g_output_file.close();
@@ -2361,6 +3103,8 @@ void writeOutput() {
 
 void freeMemory() {
 	int i;
+
+	g_available_generators.clear();
 
 	for (i = 0; i < g_number_switches; i++) {
 		delete g_switches_list[i];
@@ -2392,6 +3136,18 @@ void freeMemory() {
 		delete[] g_group0_numFlits[i];
 	}
 	delete[] g_group0_numFlits;
+    if (g_routing == ACOR || g_routing == PB_ACOR) {
+        for (i = 0; i < g_a_routers_per_group; i++) {
+                delete[] g_acor_group0_sws_packets_blocked[i];
+                if (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS ||
+                        g_acor_state_management == SWITCHCSRS)
+                    delete[] g_acor_group0_sws_status[i];
+        }
+        delete[] g_acor_group0_sws_packets_blocked;
+        if (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS ||
+                        g_acor_state_management == SWITCHCSRS)
+            delete[] g_acor_group0_sws_status;
+    }
 	delete[] g_group0_totalLatency;
 	delete[] g_groupRoot_numFlits;
 	delete[] g_groupRoot_totalLatency;
@@ -2541,9 +3297,164 @@ void writeGeneratorsInjectionProbability(char * output_name) {
 	outputFile.close();
 }
 
+void writeQcnPortEnruteMinProbability(char * output_name) {
+	string file_name(output_name);
+	ofstream outputFile;
+
+	file_name.append(".qcnPortEnruteMinProbability");
+	outputFile.open(file_name.c_str(), ios::out);
+	if (!outputFile) {
+		cerr << "Can't open the qcn port enrute min probability output file" << endl;
+		exit(-1);
+	}
+
+	outputFile << "cycle";
+	for (int j = 0; j < g_a_routers_per_group; j++)
+		for (int z = 0; z < g_a_routers_per_group - 1 + g_h_global_ports_per_router; z++)
+			outputFile << "\tSw" << j << "Port" << z + g_p_computing_nodes_per_router;
+	outputFile << endl;
+
+	for (int i = 0; i < g_max_cycles + g_warmup_cycles; i++) {
+		string line = "";
+		line += to_string(i);
+		bool empty_line = true;
+		for (int j = 0; j < g_a_routers_per_group; j++)
+			for (int z = 0; z < g_a_routers_per_group - 1 + g_h_global_ports_per_router; z++) {
+				line += "\t" + to_string(g_qcn_g0_port_enroute_min_prob[i][j][z]);
+				if (g_qcn_g0_port_enroute_min_prob[i][j][z] != -1) empty_line = false;
+			}
+		if (!empty_line) outputFile << line << endl;
+	}
+
+	outputFile.close();
+}
+
+void writeQcnPortCongestionValue(char * output_name) {
+	string file_name(output_name);
+	ofstream outputFile;
+
+	file_name.append(".qcnPortCongestionValue");
+	outputFile.open(file_name.c_str(), ios::out);
+	if (!outputFile) {
+		cerr << "Can't open the qcn port enrute min probability output file" << endl;
+		exit(-1);
+	}
+
+	outputFile << "cycle";
+	for (int j = 0; j < g_a_routers_per_group; j++)
+		for (int z = 0; z < g_p_computing_nodes_per_router + g_a_routers_per_group - 1 + g_h_global_ports_per_router;
+				z++)
+			outputFile << "\tSw" << j << "Port" << z;
+	outputFile << endl;
+
+	for (int i = 0; i < g_max_cycles + g_warmup_cycles; i++) {
+		string line = "";
+		line += to_string(i);
+		bool empty_line = true;
+		for (int j = 0; j < g_a_routers_per_group; j++)
+			for (int z = 0;
+					z < g_p_computing_nodes_per_router + g_a_routers_per_group - 1 + g_h_global_ports_per_router; z++) {
+				line += "\t" + to_string(g_qcn_g0_port_congestion[i][j][z]);
+				if (g_qcn_g0_port_congestion[i][j][z] != -1) empty_line = false;
+			}
+		if (!empty_line) outputFile << line << endl;
+	}
+
+	outputFile.close();
+}
+
+void writeDestMap(char * output_name) {
+	string file_name(output_name);
+	ofstream outputFile;
+
+	file_name.append(".dstMap");
+	outputFile.open(file_name.c_str(), ios::out);
+	if (!outputFile) {
+		cerr << "Can't open the source-destination map output file" << endl;
+		exit(-1);
+	}
+
+	int src, dst, ngh;
+	for (src = 0; src < g_number_generators; src++) {
+		if (src % (g_p_computing_nodes_per_router * g_a_routers_per_group) == 0)
+			outputFile << "### Group " << int(src / (g_p_computing_nodes_per_router * g_a_routers_per_group)) << endl;
+		dst = g_generators_list[src]->pattern->rpDestination;
+		outputFile << "Src " << src << " -> dest " << dst << "\tSw: ";
+		if (g_generators_list[src]->switchM->routing->minOutputPort(dst) >= g_global_router_links_offset)
+			outputFile << g_generators_list[src]->switchM->label << "\tGlobal link: "
+					<< g_generators_list[src]->switchM->routing->minOutputPort(dst) << endl;
+		else if (g_generators_list[src]->switchM->routing->minOutputPort(dst) < g_p_computing_nodes_per_router)
+			outputFile << g_generators_list[src]->switchM->label << "\tNO GLOBAL LINK" << endl;
+		else {
+			ngh =
+					g_generators_list[src]->switchM->routing->neighList[g_generators_list[src]->switchM->routing->minOutputPort(
+							dst)]->label;
+			outputFile << ngh << "\tGlobal link: " << g_generators_list[ngh]->switchM->routing->minOutputPort(dst)
+					<< endl;
+		}
+	}
+
+	outputFile.close();
+}
+
+void writeAcorGroup0SwsPacketsBlocked(char * output_name) {
+    string file_name(output_name);
+    ofstream outputFile;
+
+    file_name.append(".acorPacketsBlocked");
+    outputFile.open(file_name.c_str(), ios::out);
+    if (!outputFile) {
+        cerr << "Can't open the acor packets blocked output file" << endl;
+        exit(-1);
+    }
+
+    outputFile << "cycle";
+    for (int s = 0; s < g_a_routers_per_group; s++)
+        outputFile << "\tSw" << s;
+    outputFile << endl;
+
+    for (int c = 0; c < g_max_cycles + g_warmup_cycles; c++) {
+        string line = "";
+        line += to_string(c);
+        bool empty_line = true;
+        for (int s = 0; s < g_a_routers_per_group; s++) {
+            line += "\t" + to_string(g_acor_group0_sws_packets_blocked[s][c]);
+            if (g_acor_group0_sws_packets_blocked[s][c] != 0) empty_line = false;
+        }
+        if (!empty_line) outputFile << line << endl;
+    }
+    outputFile.close();
+}
+
+void writeAcorGroup0SwsStatus(char * output_name) {
+    string file_name(output_name);
+    ofstream outputFile;
+
+    file_name.append(".acorStatus");
+    outputFile.open(file_name.c_str(), ios::out);
+    if (!outputFile) {
+        cerr << "Can't open the acor status output file" << endl;
+        exit(-1);
+    }
+
+    outputFile << "cycle";
+    for (int s = 0; s < g_a_routers_per_group; s++)
+        outputFile << "\tSw" << s;
+    outputFile << endl;
+
+    for (int c = 0; c < g_max_cycles + g_warmup_cycles; c++) {
+        outputFile << to_string(c);
+        for (int s = 0; s < g_a_routers_per_group; s++) {
+            outputFile << "\t" + to_string(g_acor_group0_sws_status[s][c]);
+        }
+        outputFile << endl;
+    }
+    outputFile.close();
+}
+
 void readTraceMap(const char * tracemap_filename) {
 	int generator, node, trace, instances;
-	vector<string> values;
+	vector < string > values;
 	ConfigFile map;
 
 	/* Open configuration file */
@@ -2554,7 +3465,7 @@ void readTraceMap(const char * tracemap_filename) {
 
 	/* Initiate trace2gen map */
 	for (int i = 0; i < g_num_traces; i++) {
-		vector<vector<int> > aux; // Aux vector
+		vector < vector<int> > aux; // Aux vector
 		for (int j = 0; j < g_trace_nodes[i]; j++) {
 			aux.push_back(vector<int>()); // Add an empty vector (will be later increased by every gen mapped to the trace node)
 		}
@@ -2608,7 +3519,7 @@ void buildTraceMap() {
 
 	/* Initiate trace2gen map */
 	for (i = 0; i < g_num_traces; i++) {
-		vector<vector<int> > aux; // Aux vector
+		vector < vector<int> > aux; // Aux vector
 		for (j = 0; j < g_trace_nodes[i]; j++) {
 			aux.push_back(vector<int>()); // Add an empty vector (will be later increased by every gen mapped to the trace node)
 		}
@@ -2696,20 +3607,26 @@ void readArbiterType(const char * arbiter_type, ArbiterType * var) {
 
 void readTrafficPattern(const char * traffic_name, TrafficType * var) {
 	READ_ENUM(traffic_name, UN) else
+	READ_ENUM(traffic_name, UN_RCTV) else
 	READ_ENUM(traffic_name, ADV) else
 	READ_ENUM(traffic_name, ADV_RANDOM_NODE) else
+	READ_ENUM(traffic_name, ADV_RANDOM_NODE_RCTV) else
 	READ_ENUM(traffic_name, ADV_LOCAL) else
 	READ_ENUM(traffic_name, ADVc) else
+	READ_ENUM(traffic_name, oADV) else
 	READ_ENUM(traffic_name, SINGLE_BURST) else
 	READ_ENUM(traffic_name, ALL2ALL) else
 	READ_ENUM(traffic_name, MIX) else
 	READ_ENUM(traffic_name, TRANSIENT) else
 	READ_ENUM(traffic_name, BURSTY_UN) else
+	READ_ENUM(traffic_name, BURSTY_UN_RCTV) else
 	READ_ENUM(traffic_name, TRACE) else
-	READ_ENUM(traffic_name, UN_RCTV) else
-	READ_ENUM(traffic_name, ADV_RANDOM_NODE_RCTV) else
 	READ_ENUM(traffic_name, GRAPH500) else
-	READ_ENUM(traffic_name, BURSTY_UN_RCTV) else {
+	READ_ENUM(traffic_name, HOTREGION) else
+	READ_ENUM(traffic_name, HOTREGION_RCTV) else
+	READ_ENUM(traffic_name, HOTSPOT) else
+	READ_ENUM(traffic_name, RANDOMPERMUTATION) else
+	READ_ENUM(traffic_name, RANDOMPERMUTATION_RCTV) else {
 		cerr << "ERROR: UNRECOGNISED TRAFFIC TYPE!" << traffic_name << endl;
 		exit(0);
 	}
@@ -2721,6 +3638,8 @@ void readRoutingType(const char * routing_type, RoutingType * var) {
 	READ_ENUM(routing_type, VAL) else
 	READ_ENUM(routing_type, VAL_ANY) else
 	READ_ENUM(routing_type, OBL) else
+    READ_ENUM(routing_type, ACOR) else
+    READ_ENUM(routing_type, PB_ACOR) else
 	READ_ENUM(routing_type, SRC_ADP) else
 	READ_ENUM(routing_type, PAR) else
 	READ_ENUM(routing_type, UGAL) else
@@ -2728,10 +3647,33 @@ void readRoutingType(const char * routing_type, RoutingType * var) {
 	READ_ENUM(routing_type, PB_ANY) else
 	READ_ENUM(routing_type, OFAR) else
 	READ_ENUM(routing_type, RLM) else
-	READ_ENUM(routing_type, OLM) else {
+	READ_ENUM(routing_type, OLM) else
+	READ_ENUM(routing_type, CAR) else {
 		cerr << "ERROR: UNRECOGNISED ROUTING TYPE!" << endl;
 		exit(0);
 	}
+}
+
+void readValiantType(const char * valiant_type, ValiantType * var) {
+	READ_ENUM(valiant_type, FULL) else
+	READ_ENUM(valiant_type, SRCEXC) else
+	READ_ENUM(valiant_type, DSTEXC) else
+	READ_ENUM(valiant_type, SRCDSTEXC) else
+	READ_ENUM(valiant_type, FULL_RECOMP) else
+	READ_ENUM(valiant_type, SRCEXC_RECOMP) else
+	READ_ENUM(valiant_type, DSTEXC_RECOMP) else
+	READ_ENUM(valiant_type, SRCDSTEXC_RECOMP) else {
+		cerr << "ERROR: UNRECOGNISED VALIANT TYPE!" << endl;
+		exit(0);
+	}
+}
+
+void readValiantMisroutingDestination(const char * v_m_d, valiantMisroutingDestination * var) {
+    READ_ENUM(v_m_d, GROUP) else
+    READ_ENUM(v_m_d, NODE) else {
+        cerr << "ERROR: UNRECOGNISED VALIANT MISROUTING DESTINATION!" << endl;
+        exit(EXIT_FAILURE);
+    }
 }
 
 void readGlobalMisrouting(const char * global_misrouting, GlobalMisroutingPolicy * var) {
@@ -2758,60 +3700,108 @@ void readDeadlockAvoidanceMechanism(const char * d_a, DeadlockAvoidance * var) {
 	}
 }
 
-void readMisroutingTrigger(const char * d_a, MisroutingTrigger * var) {
-	READ_ENUM(d_a, CA) else
-	READ_ENUM(d_a, WEIGTHED_CA) else
-	READ_ENUM(d_a, FILTERED) else
-	READ_ENUM(d_a, CA_REMOTE) else
-	READ_ENUM(d_a, DUAL) else
-	READ_ENUM(d_a, CGA) else
-	READ_ENUM(d_a, HYBRID) else
-	READ_ENUM(d_a, HYBRID_REMOTE) else {
+void readMisroutingTrigger(const char * m_t, MisroutingTrigger * var) {
+	READ_ENUM(m_t, CA) else
+	READ_ENUM(m_t, WEIGHTED_CA) else
+	READ_ENUM(m_t, FILTERED) else
+	READ_ENUM(m_t, CA_REMOTE) else
+	READ_ENUM(m_t, DUAL) else
+	READ_ENUM(m_t, CGA) else
+	READ_ENUM(m_t, HYBRID) else
+	READ_ENUM(m_t, HYBRID_REMOTE) else {
 		cerr << "ERROR: UNRECOGNISED MISROUTING TRIGGER MECHANISM!" << endl;
 		exit(0);
 	}
 }
 
-void readCongestionDetection(const char * d_a, CongestionDetection * var) {
-	READ_ENUM(d_a, PER_PORT) else
-	READ_ENUM(d_a, PER_VC) else
-	READ_ENUM(d_a, PER_PORT_MIN) else
-	READ_ENUM(d_a, PER_VC_MIN) else {
-		cerr << "ERROR: UNRECOGNISED CONGESTION MANAGEMENT POLICY!: " << d_a << endl;
+void readCongestionDetection(const char * c_d, CongestionDetection * var) {
+	READ_ENUM(c_d, PER_GROUP) else
+	READ_ENUM(c_d, HISTORY_WINDOW) else
+	READ_ENUM(c_d, HISTORY_WINDOW_AVG) else
+	READ_ENUM(c_d, PER_PORT) else
+	READ_ENUM(c_d, PER_VC) else
+	READ_ENUM(c_d, PER_PORT_MIN) else
+	READ_ENUM(c_d, PER_VC_MIN) else {
+		cerr << "ERROR: UNRECOGNISED CONGESTION MANAGEMENT POLICY!: " << c_d << endl;
 	}
 }
 
-void readTraceDistribution(const char * d_a, TraceAssignation * var) {
-	READ_ENUM(d_a, RANDOM) else
-	READ_ENUM(d_a, CONSECUTIVE) else
-	READ_ENUM(d_a, INTERLEAVED) else {
+void readTraceDistribution(const char * t_d, TraceAssignation * var) {
+	READ_ENUM(t_d, RANDOM) else
+	READ_ENUM(t_d, CONSECUTIVE) else
+	READ_ENUM(t_d, INTERLEAVED) else {
 		cerr << "ERROR: UNRECOGNISED TRACE DISTRIBUTION!" << endl;
 		exit(0);
 	}
 }
 
-void readVcUsage(const char * d_a, VcUsageType * var) {
-	READ_ENUM(d_a, BASE) else
-	READ_ENUM(d_a, FLEXIBLE) else {
+void readVcUsage(const char * v_u, VcUsageType * var) {
+	READ_ENUM(v_u, BASE) else
+	READ_ENUM(v_u, FLEXIBLE) else
+	READ_ENUM(v_u, TBFLEX) else {
 		cerr << "ERROR: UNRECOGNISED VC USAGE!" << endl;
 		exit(0);
 	}
 }
 
-void readVcAlloc(const char * d_a, VcAllocationMechanism * var) {
-	READ_ENUM(d_a, HIGHEST_VC) else
-	READ_ENUM(d_a, LOWEST_VC) else
-	READ_ENUM(d_a, LOWEST_OCCUPANCY) else
-	READ_ENUM(d_a, RANDOM_VC) else {
+void readVcAlloc(const char * v_a, VcAllocationMechanism * var) {
+	READ_ENUM(v_a, HIGHEST_VC) else
+	READ_ENUM(v_a, LOWEST_VC) else
+	READ_ENUM(v_a, LOWEST_OCCUPANCY) else
+	READ_ENUM(v_a, RANDOM_VC) else {
 		cerr << "ERROR: UNRECOGNISED VC ALLOCATION MECHANISM!" << endl;
 		exit(0);
 	}
 }
 
-void readVcInj(const char * d_a, VcInjectionPolicy * var) {
-	READ_ENUM(d_a, DEST) else
-	READ_ENUM(d_a, RAND) else {
+void readVcInj(const char * v_i, VcInjectionPolicy * var) {
+	READ_ENUM(v_i, DEST) else
+	READ_ENUM(v_i, RAND) else {
 		cerr << "ERROR: UNRECOGNISED VC INJECTION POLICY!" << endl;
 		exit(0);
 	}
+}
+
+void readCongestionManagement(const char * c_m, CongestionManagement * var) {
+	READ_ENUM(c_m, BCM) else
+	READ_ENUM(c_m, ECM) else
+	READ_ENUM(c_m, PAUSE) else
+	READ_ENUM(c_m, QCNSW) else {
+		cerr << "ERROR: UNRECOGNISED CONGESTION MANAGEMENT POLICY!" << endl;
+		exit (EXIT_FAILURE);
+	}
+}
+
+void readQCNSWImplementation(const char * q_s_i, QcnSwImplementation * var) {
+	READ_ENUM(q_s_i, QCNSWBASE) else
+	READ_ENUM(q_s_i, QCNSWOUT) else
+	READ_ENUM(q_s_i, QCNSWFBCOMP) else
+	READ_ENUM(q_s_i, QCNSWCOMPLETE) else
+	READ_ENUM(q_s_i, QCNSWOUTFBCOMP) else
+	READ_ENUM(q_s_i, QCNSWSELF) else {
+		cerr << "ERROR: UNRECOGNISED QCNSW IMPLEMENTATION POLICY!" << endl;
+		exit (EXIT_FAILURE);
+	}
+}
+
+void readQCNSWPolicy(const char * q_s_p, QcnSwPolicy * var) {
+	READ_ENUM(q_s_p, AIMD) else
+	READ_ENUM(q_s_p, AIAD) else
+	READ_ENUM(q_s_p, MIMD) else
+	READ_ENUM(q_s_p, MIAD) else {
+		cerr << "ERROR: UNRECOGNISED QCNSW POLICY!" << endl;
+		exit (EXIT_FAILURE);
+	}
+}
+
+void readACORStateManagement(const char * a_s_m, acorStateManagement * var) {
+    READ_ENUM(a_s_m, PACKETCGCSRS) else
+    READ_ENUM(a_s_m, PACKETCGRS) else
+    READ_ENUM(a_s_m, PACKETCSRS) else
+    READ_ENUM(a_s_m, SWITCHCGCSRS) else
+    READ_ENUM(a_s_m, SWITCHCGRS) else
+    READ_ENUM(a_s_m, SWITCHCSRS) else {
+        cerr << "ERROR: UNRECOGNISED ACOR STATE MANAGEMENT POLICY!" << endl;
+	exit (EXIT_FAILURE);
+    }
 }

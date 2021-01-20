@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -140,6 +140,7 @@ int g_adv_traffic_local_distance = 1; /*	Distance to the adverse traffic destina
 /* Auxiliary parameters (employed in many traffic types) */
 TrafficType *g_phase_traffic_type;
 int *g_phase_traffic_adv_dist;
+float *g_phase_traffic_probability;
 int *g_phase_traffic_percent;
 /* Transient traffic parameters */
 int g_transient_traffic_cycle = 0;
@@ -167,6 +168,14 @@ vector<long long> g_graph_queries_rem_minus_means;
 long long ***g_graph_p2pmess_node2node;
 int g_graph_max_levels = 9;
 long long g_graph_p2pmess = 0;
+/* End-point congestion traffic parameters */
+int g_percent_traffic_to_congest = 25;
+/* Hot-region traffic parameters */
+float g_percent_nodes_into_region = 12.5;
+/* Hot-spot traffic parameters */
+int g_hotspot_node = 0;
+/* Random permutation auxiliar variable */
+vector<int> g_available_generators;
 
 /* Routing */
 RoutingType g_routing = MIN;
@@ -177,6 +186,8 @@ int g_ugal_local_threshold = 0;
 int g_ugal_global_threshold = 5;
 int g_piggyback_coef = 200;
 int g_th_min = 0;
+ValiantType g_valiant_type = SRCEXC;
+valiantMisroutingDestination g_valiant_misrouting_destination = NODE;
 bool g_reset_val = false;
 bool g_vc_misrouting_congested_restriction = false;
 int g_vc_misrouting_congested_restriction_coef_percent = 150;
@@ -211,6 +222,45 @@ int g_baseCongestionControl_bub = 0;
 int g_escapeCongestion_th = 100;
 int g_forceMisrouting = 0;
 bool g_try_just_escape = 0;
+float g_car_misroute_factor = 2;
+float g_car_misroute_th = 1;
+int g_local_window_size = 2;
+int g_global_window_size = 2;
+
+/* ACOR global parameters */
+acorStateManagement g_acor_state_management = SWITCHCGCSRS;
+int g_acor_hysteresis_cycle_duration_cycles;
+int g_acor_inc_state_first_th_packets;
+int g_acor_dec_state_first_th_packets;
+int g_acor_inc_state_second_th_packets;
+int g_acor_dec_state_second_th_packets;
+
+/* IEEE 802.1Qbb */
+unsigned int g_pause_go;
+
+/* Quantized Congestion Nofitication - 802.1Qau */
+float g_qcn_gd = (float) 1/128;
+int g_qcn_bc_limit = 30000;
+float g_qcn_timer_period = 0.01;
+float g_qcn_r_ai = 0.0000125;
+float g_qcn_r_hai =  0.000125;
+int g_qcn_fast_recovery_th = 5;
+float g_qcn_min_rate = 0.0000125;
+unsigned int g_qcn_q_eq = 6600;
+float g_qcn_w = 2.0;
+float g_qcn_c = g_injection_probability;
+long long g_qcn_queue_length = 1000;
+unsigned int g_qcn_cp_sampling_interval = 30000;
+int g_qcn_port;
+QcnSwImplementation g_qcn_implementation = QCNSWBASE;
+QcnSwPolicy g_qcn_policy = AIMD;
+int g_qcn_th1 = 0;
+int g_qcn_th2 = 0;
+int g_qcn_cnms_percent = 10;
+float ***g_qcn_g0_port_enroute_min_prob;
+bool g_qcn_transient_stats = false;
+int ***g_qcn_g0_port_congestion;
+
 
 /* Statistics variables */
 long double g_flit_latency = 0;
@@ -230,10 +280,18 @@ vector<long long> g_latency_histogram_no_global_misroute;
 vector<long long> g_latency_histogram_global_misroute_at_injection;
 vector<long long> g_latency_histogram_other_global_misroute;
 long long g_tx_flit_counter = 0;
+long long g_tx_cnmFlit_counter = 0;
+long long g_tx_flit_counter_printC = 0;
 long long g_rx_flit_counter = 0;
+long long g_rx_cnmFlit_counter = 0;
+long long g_rx_acorState_counter[4] = { 0 };
+long long g_rx_flit_counter_printC = 0;
 long long g_attended_flit_counter = 0;
 long long g_tx_warmup_flit_counter = 0;
+long long g_tx_warmup_cnmFlit_counter = 0;
 long long g_rx_warmup_flit_counter = 0;
+long long g_rx_warmup_cnmFlit_counter = 0;
+long long g_rx_warmup_acorState_counter[4] = { 0 };
 long long g_response_counter = 0;
 long long g_response_warmup_counter = 0;
 long long g_nonminimal_counter = 0;
@@ -251,6 +309,8 @@ long long g_local_misrouted_flit_counter[4] = { 0 };
 int *g_transient_record_flits;
 int *g_transient_record_misrouted_flits;
 long long ***g_group0_numFlits;
+int **g_acor_group0_sws_packets_blocked;
+int **g_acor_group0_sws_status;
 long long *g_groupRoot_numFlits;
 float *g_transient_net_injection_latency;
 float *g_transient_net_injection_inj_latency;
@@ -296,9 +356,13 @@ unsigned int g_served_petitions = 0;
 unsigned int g_injection_petitions = 0;
 unsigned int g_served_injection_petitions = 0;
 long long g_max_injection_packets_per_sw = 0;
+long long g_max_injection_cnmPackets_per_sw = 0;
 int g_sw_with_max_injection_pkts = -1;
+int g_sw_with_max_injection_cnmPkts = -1;
 long long g_min_injection_packets_per_sw = 0;
+long long g_min_injection_cnmPackets_per_sw = 0;
 int g_sw_with_min_injection_pkts = -1;
+int g_sw_with_min_injection_cnmPkts = -1;
 int g_transient_record_len = 10100;
 int g_transient_record_num_cycles = 10000;
 int g_transient_record_num_prev_cycles = 100;

@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,7 +23,7 @@
 using namespace std;
 
 flitModule::flitModule(int packetId, int flitId, int flitSeq, int sourceId, int destId, int destSwitch, int valId,
-		bool head, bool tail, unsigned short cos) {
+		bool head, bool tail, unsigned short cos, FlitType flitType) {
 	assert(destId < g_number_generators);
 	this->flitId = flitId;
 	this->packetId = packetId;
@@ -68,15 +68,21 @@ flitModule::flitModule(int packetId, int flitId, int flitSeq, int sourceId, int 
 	sourceSubnetworkInjectionsCount = 0;
 	localEscapeContentionCount = 0;
 	globalEscapeContentionCount = 0;
-	flitType = RESPONSE;
+	this->flitType = flitType;
 	petitionSrcId = -1;
 	petitionLatency = 0;
+	fb = 0;
+	qoff = 0;
+	qdelta = 0;
 	this->length = g_flit_size;
 	assert(cos < g_cos_levels);
+	assert((flitType == CNM && cos == g_cos_levels - 1) || (flitType != CNM && (cos == 0 || cos < g_cos_levels - 1)));
 	this->cos = cos;
 	graph_queries = -1;
+    this->acorFlitStatus = None;
 
-	this->nextP = this->nextVC = this->prevP = this->prevVC - 1;
+	this->nextP = this->nextVC = this->prevP = this->prevVC = - 1;
+	this->currentlyEnrouted = false;
 }
 
 /*
@@ -170,7 +176,10 @@ void flitModule::addContention(int inP, int swId) {
 				globalEscapeContentionCount += g_internal_cycle;
 			}
 			return;
-		} else if (inP >= g_global_router_links_offset + g_h_global_ports_per_router) {
+		} else if ((g_congestion_management != QCNSW &&
+				inP >= g_global_router_links_offset + g_h_global_ports_per_router) ||
+				(g_congestion_management == QCNSW && 
+				inP >= g_global_router_links_offset + g_h_global_ports_per_router + 1)) {
 			/* Physical ring */
 			assert(g_deadlock_avoidance == RING && g_ring_ports != 0);
 			if ((inP == g_ports - 2 && thisA == 0) || (inP == g_ports - 1 && thisA == g_a_routers_per_group - 1)) {
@@ -330,4 +339,15 @@ int flitModule::getMisrouteCount(MisrouteType type) const {
 			assert(0);
 	}
 	return -1;
+}
+
+/*
+ Set the Congestion Notification Message parameters passed by arguments and
+ set flitType to CNM.
+ */
+void flitModule::setQcnParameters(unsigned short fb, int qoff, int qdelta) {
+	this->flitType = CNM;
+	this->fb = fb;
+	this->qoff = qoff;
+	this->qdelta = qdelta;
 }

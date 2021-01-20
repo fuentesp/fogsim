@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -24,6 +24,8 @@
 priorityAgeArbiter::priorityAgeArbiter(PortType type, int portNumber, unsigned short cos, int numPorts,
 		int portPriorOffset, switchModule *switchM) :
 		ageArbiter(type, portNumber, cos, numPorts, switchM) {
+	assert(portPriorOffset <= g_p_computing_nodes_per_router);
+	/* QCN is incompatible with assign more priority to injection ports, the qcn port is considered a transit port. */
 	this->portPriorOffset = portPriorOffset;
 
 	/* In priority age arbiter, we need to alter initial ageArbiter order */

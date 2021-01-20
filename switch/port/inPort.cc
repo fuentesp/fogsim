@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -37,7 +37,7 @@ inPort::~inPort() {
  */
 bool inPort::extract(unsigned short cos, int vc, flitModule* &flitExtracted, float length) {
 	assert(cos >= 0 && cos < this->port::cosLevels);
-	if (g_vc_usage == FLEXIBLE)
+	if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX)
 		assert(vc >= 0 && vc < g_local_link_channels + g_global_link_channels);
 	else
 		assert(vc >= 0 && vc < this->port::numVCs);
@@ -52,7 +52,7 @@ bool inPort::extract(unsigned short cos, int vc, flitModule* &flitExtracted, flo
  */
 void inPort::insert(int vc, flitModule* flit, float txLength) {
 	assert(flit->cos >= 0 && flit->cos < this->port::cosLevels);
-	if (g_vc_usage == FLEXIBLE)
+	if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX)
 		assert(vc >= 0 && vc < g_local_link_channels + g_global_link_channels);
 	else
 		assert(vc >= 0 && vc < this->port::numVCs);

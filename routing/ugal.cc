@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -23,6 +23,13 @@
 ugal::ugal(switchModule *switchM) :
 		baseRouting(switchM) {
 	assert(g_deadlock_avoidance == DALLY); /* Sanity check */
+	assert(g_vc_usage == BASE);
+	/* Set up the vc management. */
+	const int minLocalVCs = 3, minGlobalVCs = 2;
+	portClass aux[] = { portClass::local, portClass::global, portClass::local, portClass::global, portClass::local };
+	vector<portClass> typeVc(aux, aux + minLocalVCs + minGlobalVCs);
+	this->vcM = new vcMngmt(&typeVc, switchM);
+	vcM->checkVcArrayLengths(minLocalVCs, minGlobalVCs);
 }
 
 ugal::~ugal() {
@@ -57,7 +64,7 @@ candidate ugal::enroute(flitModule * flit, int inPort, int inVC) {
 	}
 
 	selectedRoute.neighPort = this->neighPort[selectedRoute.port];
-	selectedRoute.vc = this->nextChannel(inPort, selectedRoute.port, flit);
+	selectedRoute.vc = vcM->nextChannel(inPort, selectedRoute.port, flit);
 
 	/* Sanity checks */
 	assert(selectedRoute.port < portCount && selectedRoute.port >= 0);
@@ -88,8 +95,8 @@ bool ugal::misrouteCondition(flitModule * flit, int inPort) {
 		result = true;
 	} else if ((inPort < g_p_computing_nodes_per_router) && (minOutP >= g_p_computing_nodes_per_router)) {
 		/* Determine credit occupancy for minimal and Valiant paths */
-		minQueueLength = switchM->getCreditsOccupancy(minOutP, flit->cos, this->nextChannel(inPort, minOutP, flit));
-		valQueueLength = switchM->getCreditsOccupancy(valOutP, flit->cos, this->nextChannel(inPort, valOutP, flit));
+		minQueueLength = switchM->getCreditsOccupancy(minOutP, flit->cos, vcM->nextChannel(inPort, minOutP, flit));
+		valQueueLength = switchM->getCreditsOccupancy(valOutP, flit->cos, vcM->nextChannel(inPort, valOutP, flit));
 
 		/* UGAL-L(ocal) condition: if the product of minimal outport queue occupancy and the
 		 * minimal path length is greater than the corresponding of Valiant path (plus a

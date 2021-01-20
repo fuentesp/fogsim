@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -19,22 +19,19 @@
  */
 
 #include "rlm.h"
+#include "../switch/vcManagement/rlmVcMngmt.h"
 
 rlm::rlm(switchModule *switchM) :
 		baseRouting(switchM) {
+	const int minLocalVCs = 6, minGlobalVCs = 2;
 	assert(g_deadlock_avoidance == DALLY); // Sanity check
-	/* Remove default VC and port type ordering to replace with specific for RLM */
-	baseRouting::typeVc.clear();
-	baseRouting::petitionVc.clear();
-	baseRouting::responseVc.clear();
-	char aux[] = { 'a', 'a', 'h', 'a', 'a', 'h', 'a', 'a' };
-	typeVc.insert(typeVc.begin(), aux, aux + 8);
-	int aux2[] = { 0, 0, 0, 1, 1, 1, 2, 2 };
-	petitionVc.insert(petitionVc.begin(), aux2, aux2 + 8);
-	if (g_reactive_traffic) {
-		int aux3[] = { 3, 3, 2, 4, 4, 3, 5, 5 };
-		responseVc.insert(responseVc.begin(), aux3, aux3 + 8);
-	}
+	assert(g_vc_usage == BASE);
+	/* Set up the VC management specific for RLM */
+	portClass aux[] = { portClass::local, portClass::local, portClass::global, portClass::local, portClass::local,
+			portClass::global, portClass::local, portClass::local };
+	vector<portClass> typeVc(aux, aux + 8);
+	this->vcM = new rlmVcMngmt(&typeVc, switchM);
+	vcM->checkVcArrayLengths(minLocalVCs, minGlobalVCs);
 }
 
 rlm::~rlm() {
@@ -50,7 +47,7 @@ candidate rlm::enroute(flitModule * flit, int inPort, int inVC) {
 	/* Determine minimal output port (& VC) */
 	destination = flit->destId;
 	minOutP = this->minOutputPort(destination);
-	minOutVC = this->nextChannel(inPort, minOutP, flit);
+	minOutVC = vcM->nextChannel(inPort, minOutP, flit);
 
 	/* Calculate misroute output port (if any should be taken) */
 	if (this->misrouteCondition(flit, minOutP, minOutVC)) {

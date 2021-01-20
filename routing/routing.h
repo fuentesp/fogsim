@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -25,6 +25,9 @@
 #include "../dgflySimulator.h"
 #include "../switch/switchModule.h"
 #include "../flit/flitModule.h"
+#include "../switch/vcManagement/vcMngmt.h"
+#include "../switch/vcManagement/flexVc.h"
+#include "../switch/vcManagement/tbFlexVc.h"
 
 class switchModule;
 class flitModule;
@@ -49,18 +52,7 @@ public:
 	int *tableSwOut, *tableGroupOut, *tableInRing1, *tableOutRing1, *tableInRing2, *tableOutRing2, *tableInTree,
 			*tableOutTree;
 	bool *** globalLinkCongested; /* Employed under congested restriction to determine wether to misroute or not */
-
-	vector<int> petitionVc;
-	vector<int> responseVc;
-	vector<char> typeVc;
-	vector<int> globalVc;
-	vector<int> localVcSource;
-	vector<int> localVcInter;
-	vector<int> localVcDest;
-	vector<int> globalResVc;
-	vector<int> localResVcSource;
-	vector<int> localResVcInter;
-	vector<int> localResVcDest;
+	vcMngmt* vcM;//TODO: move into protected class, once all routing mechanisms inherit from baseRouting and qcnVcMngmt is addressed properly
 
 	baseRouting(switchModule *switchM);
 	~baseRouting();
@@ -69,8 +61,6 @@ public:
 	int minOutputPort(int dest);
 	bool escapePort(int port);
 	void updateCongestionStatusGlobalLinks();
-	int nextChannel(int inP, int outP, flitModule * flit);
-	char portType(int port);
 	bool validMisroutePort(flitModule * flit, int outP, int nextC, double threshold, MisrouteType misroute);
 	virtual struct candidate enroute(flitModule * flit, int inPort, int inVC) = 0;
 	int hopsToDest(flitModule * flit, int outP);

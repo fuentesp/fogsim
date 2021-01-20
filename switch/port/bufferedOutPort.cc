@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -27,7 +27,7 @@ bufferedOutPort::bufferedOutPort(unsigned short cosLevels, int numVCs, int portN
 				delay, reservedBufferCapacity) {
 	/* When using FLEXIBLE vcs, the # of VCs is updated to reflect the new range of vcs
 	 * used (local & global vcs can not share a link to be more easily differentiated) */
-	if (g_vc_usage == FLEXIBLE) numVCs = g_local_link_channels + g_global_link_channels;
+	if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX) numVCs = g_local_link_channels + g_global_link_channels;
 	this->numberSegregatedFlows = numberSegregatedFlows;
 	outCredits = new int**[cosLevels];
 	outMinCredits = new int**[cosLevels];
@@ -52,8 +52,8 @@ bufferedOutPort::bufferedOutPort(unsigned short cosLevels, int numVCs, int portN
 }
 
 bufferedOutPort::~bufferedOutPort() {
-	for (int cos = 0; cos < this->port::cosLevels; cos++) {
-		for (int vc = 0; vc < this->port::numVCs; vc++) {
+	for (int cos = 0; cos < this->outPort::cosLevels; cos++) {
+		for (int vc = 0; vc < this->outPort::numVCs; vc++) {
 			delete[] outCredits[cos][vc];
 			delete[] outMinCredits[cos][vc];
 			delete[] maxOutCredits[cos][vc];
@@ -73,25 +73,25 @@ bufferedOutPort::~bufferedOutPort() {
  * buffers statistics.
  */
 bool bufferedOutPort::extract(unsigned short cos, int vc, flitModule* &flitExtracted, float length, int buffer) {
-	assert(cos >= 0 && cos < this->port::cosLevels);
+	assert(cos >= 0 && cos < this->outPort::cosLevels);
 	assert(vc >= 0 && vc < this->outPort::numVCs);
 	assert(length == g_flit_size);
 	assert(buffer >= 0 && buffer < this->numberSegregatedFlows);
 	m_sw->messagesInQueuesCounter -= 1; /*First we update sw track stats */
-	outCredits[cos][vc][buffer] -= length;
-	assert(outCredits[cos][vc][buffer] >= 0);
+	bool aux = vcBuffers[cosOutPort][buffer]->extract(flitExtracted, length);
+	outCredits[flitExtracted->cos][vc][buffer] -= length;
+	assert(outCredits[flitExtracted->cos][vc][buffer] >= 0);
 	if (!flitExtracted->getMisrouted()) {
-		outMinCredits[cos][vc][buffer] -= length;
-		assert(outMinCredits[cos][vc][buffer] >= 0);
+		outMinCredits[flitExtracted->cos][vc][buffer] -= length;
+		assert(outMinCredits[flitExtracted->cos][vc][buffer] >= 0);
 	} else
 		flitExtracted->setMisrouted(true); /* Update misroute status */
 	if (label >= g_p_computing_nodes_per_router) {
-		occupancyCredits[cos][vc] += length;
-		assert(occupancyCredits[cos][vc] <= maxCredits[cos][vc]);
-		if (!flitExtracted->getMisrouted()) minOccupancyCredits[cos][vc] += length;
-		assert(minOccupancyCredits[cos][vc] <= occupancyCredits[cos][vc]);
+		occupancyCredits[flitExtracted->cos][vc] += length;
+		assert(occupancyCredits[flitExtracted->cos][vc] <= maxCredits[flitExtracted->cos][vc]);
+		if (!flitExtracted->getMisrouted()) minOccupancyCredits[flitExtracted->cos][vc] += length;
+		assert(minOccupancyCredits[flitExtracted->cos][vc] <= occupancyCredits[flitExtracted->cos][vc]);
 	}
-	bool aux = vcBuffers[cos][buffer]->extract(flitExtracted, length);
 	if (flitExtracted->flitType == PETITION) numConsumePetitions--; /* # of petitions for reactive traffic */
 	assert(buffer == 0 || flitExtracted->flitType == RESPONSE);
 	return aux;
@@ -103,7 +103,7 @@ bool bufferedOutPort::extract(unsigned short cos, int vc, flitModule* &flitExtra
  * statistics.
  */
 void bufferedOutPort::insert(int vc, flitModule* flit, float txLength, int buffer) {
-	assert(flit->cos >= 0 && flit->cos < this->port::cosLevels);
+	assert(flit->cos >= 0 && flit->cos < this->outPort::cosLevels);
 	assert(vc >= 0 && vc < this->outPort::numVCs);
 	assert(buffer >= 0 && buffer < this->numberSegregatedFlows);
 	assert(buffer == 0 || flit->flitType == RESPONSE);
@@ -118,15 +118,15 @@ void bufferedOutPort::insert(int vc, flitModule* flit, float txLength, int buffe
 		outMinCredits[flit->cos][vc][buffer] += g_flit_size;
 		assert(outMinCredits[flit->cos][vc][buffer] <= outCredits[flit->cos][vc][buffer]);
 	}
-	assert(vcBuffers[0][buffer]->getSpace() >= txLength);
-	vcBuffers[0][buffer]->insert(flit, txLength);
+	assert(vcBuffers[cosOutPort][buffer]->getSpace() >= txLength);
+	vcBuffers[cosOutPort][buffer]->insert(flit, txLength);
 }
 
 /* Returns occupancy status based on credits for an output
  * port; considering both next input buffer and current
  * output buffer */
 int bufferedOutPort::getTotalOccupancy(unsigned short cos, int vc, int buffer) {
-	assert(cos >= 0 && cos < this->port::cosLevels);
+	assert(cos >= 0 && cos < this->outPort::cosLevels);
 	assert(this->label >= g_p_computing_nodes_per_router); /* Sanity assert, since this function is not updated to segregated traffic flows */
 	assert(vc >= 0 && vc < this->outPort::numVCs);
 	assert(buffer >= 0 && buffer < this->numberSegregatedFlows);
@@ -134,7 +134,7 @@ int bufferedOutPort::getTotalOccupancy(unsigned short cos, int vc, int buffer) {
 }
 
 int bufferedOutPort::getMinOccupancy(unsigned short cos, int vc) {
-	assert(cos >= 0 && cos < this->port::cosLevels);
+	assert(cos >= 0 && cos < this->outPort::cosLevels);
 	assert(this->label >= g_p_computing_nodes_per_router); /* Sanity assert, since this function is not updated to segregated traffic flows */
 	assert(vc >= 0 && vc < this->outPort::numVCs);
 	return minOccupancyCredits[cos][vc] + outMinCredits[cos][vc][0];
@@ -143,14 +143,14 @@ int bufferedOutPort::getMinOccupancy(unsigned short cos, int vc) {
 /* Updates maximum occupancy registers for output buffer.
  * Should only be called upon switch initialization phase */
 void bufferedOutPort::setMaxOutOccupancy(unsigned short cos, int vc, int phits) {
-	assert(cos >= 0 && cos < this->port::cosLevels);
+	assert(cos >= 0 && cos < this->outPort::cosLevels);
 	assert(vc >= 0 && vc < this->outPort::numVCs);
 	for (int buffer = 0; buffer < this->numberSegregatedFlows; buffer++) {
 		maxOutCredits[cos][vc][buffer] = phits;
 	}
 	totalMaxOutCredits = 0;
 	for (unsigned short cos = 0; cos < this->port::cosLevels; cos++)
-		for (int vc = 0; vc < this->port::numVCs; vc++)
+		for (int vc = 0; vc < this->outPort::numVCs; vc++)
 			totalMaxOutCredits += maxOutCredits[cos][vc][0];
 }
 
@@ -163,34 +163,34 @@ int bufferedOutPort::getNumPetitions() {
 
 int bufferedOutPort::getSpace(int vc, int buffer) {
 	assert(buffer < numberSegregatedFlows);
-	return this->bufferedPort::getSpace(0, buffer);
+	return this->bufferedPort::getSpace(cosOutPort, buffer);
 }
 
 void bufferedOutPort::checkFlit(unsigned short cos, int vc, flitModule* &nextFlit, int buffer, int offset) {
 	assert(buffer < numberSegregatedFlows);
-	this->bufferedPort::checkFlit(cos, buffer, nextFlit, offset);
+	this->bufferedPort::checkFlit(cosOutPort, buffer, nextFlit, offset);
 }
 
 int bufferedOutPort::getBufferOccupancy(int vc, int buffer) {
 	assert(buffer < numberSegregatedFlows);
-	return this->bufferedPort::getBufferOccupancy(0, buffer);
+	return this->bufferedPort::getBufferOccupancy(cosOutPort, buffer);
 }
 
 bool bufferedOutPort::canSendFlit(unsigned short cos, int vc, int buffer) {
 	assert(buffer < numberSegregatedFlows);
-	return this->bufferedPort::canSendFlit(cos, buffer);
+	return this->bufferedPort::canSendFlit(cosOutPort, buffer);
 }
 
 bool bufferedOutPort::canReceiveFlit(int vc) {
 	bool can_receive_flit = true;
 	for (int i = 0; i < this->numberSegregatedFlows; i++) {
-		can_receive_flit &= this->bufferedPort::canReceiveFlit(0, i);
+		can_receive_flit &= this->bufferedPort::canReceiveFlit(cosOutPort, i);
 	}
 	return can_receive_flit;
 }
 
 void bufferedOutPort::reorderBuffer(int vc) {
 	for (int buffer = 0; buffer < this->numberSegregatedFlows; buffer++) {
-		this->bufferedPort::reorderBuffer(0, buffer);
+		this->bufferedPort::reorderBuffer(cosOutPort, buffer);
 	}
 }

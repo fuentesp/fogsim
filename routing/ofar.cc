@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -24,7 +24,14 @@ ofar::ofar(switchModule *switchM) :
 		baseRouting(switchM) {
 	assert(
 			g_deadlock_avoidance == RING || g_deadlock_avoidance == EMBEDDED_RING
-					|| g_deadlock_avoidance == EMBEDDED_TREE); // Sanity check
+					|| g_deadlock_avoidance == EMBEDDED_TREE); /* Sanity check */
+	assert(g_vc_usage == BASE);
+	/* Set up the vc management */
+	const int minLocalVCs = 3, minGlobalVCs = 2;
+	portClass aux[] = { portClass::local, portClass::global, portClass::local, portClass::global, portClass::local };
+	vector<portClass> typeVc(aux, aux + minLocalVCs + minGlobalVCs);
+	this->vcM = new vcMngmt(&typeVc, switchM);
+	vcM->checkVcArrayLengths(minLocalVCs, minGlobalVCs);
 }
 
 ofar::~ofar() {
@@ -40,7 +47,7 @@ candidate ofar::enroute(flitModule * flit, int inPort, int inVC) {
 	/* Determine minimal output port (& VC) */
 	destination = flit->destId;
 	minOutP = this->minOutputPort(destination);
-	minOutVC = this->nextChannel(inPort, minOutP, flit);
+	minOutVC = vcM->nextChannel(inPort, minOutP, flit);
 
 	/* Calculate misroute output port (if any should be taken) */
 	if (this->misrouteCondition(flit, minOutP, minOutVC)) {

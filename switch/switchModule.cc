@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -32,12 +32,14 @@
 #include "../routing/val.h"
 #include "../routing/valAny.h"
 #include "../routing/obl.h"
+#include "../routing/acor.h"
+#include "../routing/pbAcor.h"
 #include "../routing/srcAdp.h"
+#include "../routing/car.h"
 #include "../flit/creditFlit.h"
 #include "../routing/routing.h"
+#include "../switch/vcManagement/qcnVcMngmt.h"
 #include <iomanip>
-
-using namespace std;
 
 switchModule::switchModule(string name, int label, int aPos, int hPos, int ports, int vcCount) :
 		piggyBack(aPos), m_ca_handler(this) {
@@ -45,37 +47,45 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 	this->portCount = ports;
 	this->cosLevels = g_cos_levels;
 	this->vcCount = vcCount;
-	this->inPorts = new inPort *[portCount];
+	/* portCount + 1 additional port for QCN injection */
+	this->inPorts = new inPort *[(g_congestion_management == QCNSW) ? portCount + 1 : portCount];
 	this->outPorts = new outPort *[portCount];
-	this->inputArbiters = new inputArbiter *[portCount];
+	this->inputArbiters =
+			new inputArbiter *[(g_congestion_management == QCNSW) ? this->portCount + 1 : this->portCount];
 	this->outputArbiters = new outputArbiter *[portCount];
 	this->label = label;
 	this->aPos = aPos;
 	this->hPos = hPos;
 	this->messagesInQueuesCounter = 0;
 	this->escapeNetworkCongested = false;
-	this->queueOccupancy = new float[ports * this->vcCount];
+	this->queueOccupancy = new float[
+			(g_congestion_management == QCNSW) ? (portCount + 1) * vcCount : portCount * vcCount];
 	this->injectionQueueOccupancy = new float[this->vcCount];
 	this->localQueueOccupancy = new float[this->vcCount];
 	this->globalQueueOccupancy = new float[this->vcCount];
 	this->localEscapeQueueOccupancy = new float[this->vcCount];
 	this->globalEscapeQueueOccupancy = new float[this->vcCount];
 	this->packetsInj = 0;
+	this->cnmPacketsInj = 0;
 	this->reservedOutPort = new bool[this->portCount];
 	this->reservedInPort = new bool*[cosLevels];
 	for (int cos = 0; cos < cosLevels; cos++)
 		this->reservedInPort[cos] = new bool[this->vcCount];
-
+	this->qcnQlen = 0;
+    if (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS) {
+        this->acorSwStatus = CRGLGr;
+        this->acorResetSwitchHysteresisStatus();
+    } else if (g_acor_state_management == SWITCHCSRS) {
+        this->acorSwStatus = CRGLSw;
+        this->acorResetSwitchHysteresisStatus();
+    }
 	int p, c, bufferCap;
 	float linkDelay;
 	bool escape;
 
 	switch (g_routing) {
 		case MIN:
-			if (g_vc_usage == FLEXIBLE)
-				this->routing = new minimal<flexibleVcRouting>(this);
-			else
-				this->routing = new minimal<baseRouting>(this);
+			this->routing = new minimal(this);
 			break;
 		case MIN_COND:
 			assert(g_vc_usage == BASE);
@@ -85,49 +95,48 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 			this->routing = new ofar(this);
 			break;
 		case OLM:
-			if (g_vc_usage == FLEXIBLE)
-				this->routing = new olm<flexibleVcRouting>(this);
-			else
-				this->routing = new olm<baseRouting>(this);
+			this->routing = new olm(this);
 			break;
 		case PAR:
+			assert(g_vc_usage == BASE);
 			this->routing = new par(this);
 			break;
 		case PB:
+			assert(g_vc_usage == BASE);
 			this->routing = new pb(this);
 			break;
 		case PB_ANY:
+			assert(g_vc_usage == BASE);
 			this->routing = new pbAny(this);
 			break;
 		case RLM:
+			assert(g_vc_usage == BASE);
 			this->routing = new rlm(this);
 			break;
 		case UGAL:
+			assert(g_vc_usage == BASE);
 			this->routing = new ugal(this);
 			break;
 		case VAL:
-			if (g_vc_usage == FLEXIBLE)
-				this->routing = new val<flexibleVcRouting>(this);
-			else
-				this->routing = new val<baseRouting>(this);
+			this->routing = new val(this);
 			break;
 		case VAL_ANY:
-			if (g_vc_usage == FLEXIBLE)
-				this->routing = new valAny<flexibleVcRouting>(this);
-			else
-				this->routing = new valAny<baseRouting>(this);
+			this->routing = new valAny(this);
 			break;
 		case OBL:
-			if (g_vc_usage == FLEXIBLE)
-				this->routing = new oblivious<flexibleVcRouting>(this);
-			else
-				this->routing = new oblivious<baseRouting>(this);
+			this->routing = new oblivious(this);
 			break;
+        case ACOR:
+            this->routing = new acor(this);
+            break;
+        case PB_ACOR:
+            this->routing = new pbAcor(this);
+            break;
 		case SRC_ADP:
-			if (g_vc_usage == FLEXIBLE)
-				this->routing = new sourceAdp<flexibleVcRouting>(this);
-			else
-				this->routing = new sourceAdp<baseRouting>(this);
+			this->routing = new sourceAdp(this);
+			break;
+		case CAR:
+			this->routing = new contAdpRouting(this);
 			break;
 		default:
 			//YET UNDEFINED!
@@ -144,6 +153,11 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 			this->queueOccupancy[(p * this->vcCount) + c] = 0;
 		}
 		incomingCredits[p] = new queue<creditFlit>;
+	}
+	if (g_congestion_management == QCNSW) {
+		for (c = 0; c < this->vcCount; c++) {
+			this->queueOccupancy[(p * this->vcCount) + c] = 0;
+		}
 	}
 
 	for (c = 0; c < this->vcCount; c++) {
@@ -176,6 +190,12 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 						g_global_queue_length, g_global_link_transmission_delay, this);
 				this->outPorts[p] = new outPort(this->cosLevels, g_global_link_channels, p, this);
 			}
+			/* QCN queue */
+			if (g_congestion_management == QCNSW) {
+				assert(g_qcn_port == g_global_router_links_offset + g_h_global_ports_per_router);
+				this->inPorts[g_qcn_port] = new inPort(this->cosLevels, g_injection_channels, g_qcn_port,
+						g_qcn_port * cosLevels * this->vcCount, g_qcn_queue_length, g_injection_delay, this);
+			}
 			break;
 		case DYNAMIC:
 			/* Injection queues */
@@ -201,13 +221,52 @@ switchModule::switchModule(string name, int label, int aPos, int hPos, int ports
 				outPorts[p] = new dynamicBufferOutPort(this->cosLevels, g_global_link_channels, p, this,
 						g_global_queue_reserved);
 			}
+			// TODO: ADD QCN port to dynamic byffer type for support QCN with dynamic buffers
 			break;
 	}
 
 	/* Now we can instantiate arbiters */
 	for (p = 0; p < this->portCount; p++) {
 		this->inputArbiters[p] = new inputArbiter(p, cosLevels, this, g_input_arbiter_type);
-		this->outputArbiters[p] = new outputArbiter(p, cosLevels, this->portCount, this, g_output_arbiter_type);
+		this->outputArbiters[p] = new outputArbiter(p, cosLevels,
+				(g_congestion_management == QCNSW) ? this->portCount + 1 : this->portCount, this,
+				g_output_arbiter_type);
+	}
+
+	/* QCN Congestion Point variables */
+	if (g_congestion_management == QCNSW) {
+		/* QCN sampling counter interval and queue length by port */
+		this->qcnCpSamplingCounter = new int[this->portCount];
+		this->qcnQlenOld = new int[this->portCount];
+		for (p = 0; p < this->portCount; p++) {
+			this->qcnCpSamplingCounter[p] = g_qcn_cp_sampling_interval;
+			this->qcnQlenOld[p] = 0;
+		}
+		/* Additional arbiter for QCN input port */
+		this->inputArbiters[g_qcn_port] = new inputArbiter(p, cosLevels, this, g_input_arbiter_type);
+		/* QCN routing policy = MIN */
+		this->qcnRouting = new minimal(this);
+		delete this->qcnRouting->vcM;
+		portClass aux[] = { portClass::local, portClass::global, portClass::local };
+		vector<portClass> typeVc(aux, aux + 2 + 1);
+		this->qcnRouting->vcM = new qcnVcMngmt(&typeVc, this, routing->vcM->getHighestVc(portClass::local)+1,
+				routing->vcM->getHighestVc(portClass::global)+1);
+		this->qcnRouting->vcM->checkVcArrayLengths(routing->vcM->localVcDest.size(), routing->vcM->globalVc.size());
+	}
+	/* QCNSW Reaction point in switch variables */
+	if (g_congestion_management == QCNSW) {
+		// QCNSWBASE variables
+		this->qcnRpTxBCount = new int[this->portCount];
+		this->portEnrouteMinProb = new float[this->portCount];
+		// QCNSWFBCOMP and QCNSWOUTFBCOMP variables
+		if (g_qcn_implementation == QCNSWFBCOMP || g_qcn_implementation == QCNSWOUTFBCOMP
+				|| g_qcn_implementation == QCNSWCOMPLETE) this->qcnPortFb = new int[this->portCount];
+		for (p = 0; p < this->portCount; p++) {
+			this->portEnrouteMinProb[p] = 100;
+			this->qcnRpTxBCount[p] = g_qcn_bc_limit;
+			if (g_qcn_implementation == QCNSWFBCOMP || g_qcn_implementation == QCNSWOUTFBCOMP
+					|| g_qcn_implementation == QCNSWCOMPLETE) this->qcnPortFb[p] = 0;
+		}
 	}
 }
 
@@ -218,6 +277,14 @@ switchModule::~switchModule() {
 		delete incomingCredits[p];
 		delete inPorts[p];
 		delete outPorts[p];
+	}
+
+	if (g_congestion_management == QCNSW) {
+		delete[] qcnCpSamplingCounter;
+		delete[] qcnRpTxBCount;
+		delete[] portEnrouteMinProb;
+		if (g_qcn_implementation == QCNSWFBCOMP || g_qcn_implementation == QCNSWOUTFBCOMP
+				|| g_qcn_implementation == QCNSWCOMPLETE) delete[] qcnPortFb;
 	}
 	delete[] inputArbiters;
 	delete[] outputArbiters;
@@ -370,7 +437,7 @@ void switchModule::resetCredits() {
 	 * connected to the next switch to index tableIn, which means:
 	 * switchId * g_p_computing_nodes_per_router (numberOfGeneratorsPerSwitch),
 	 * to find out the input port in the next switch. */
-	numVCs = (g_vc_usage == FLEXIBLE) ? vcCount : g_local_link_channels;
+	numVCs = (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX) ? vcCount : g_local_link_channels;
 	for (thisPort = g_p_computing_nodes_per_router; thisPort < g_global_router_links_offset; thisPort++)
 		for (cos = 0; cos < this->cosLevels; cos++)
 			for (chan = 0; chan < numVCs; chan++) {
@@ -380,7 +447,7 @@ void switchModule::resetCredits() {
 				/* Sanity check: initial credits must be equal to the buffer capacity (in phits) */
 				assert(switchModule::getCredits(thisPort, cos, chan) == outPorts[thisPort]->getMaxOccupancy(cos, chan));
 			}
-	numVCs = (g_vc_usage == FLEXIBLE) ? vcCount : g_global_link_channels;
+	numVCs = (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX) ? vcCount : g_global_link_channels;
 	for (thisPort = g_global_router_links_offset; thisPort < portCount; thisPort++)
 		for (cos = 0; cos < this->cosLevels; cos++)
 			for (chan = 0; chan < numVCs; chan++) {
@@ -425,6 +492,8 @@ void switchModule::insertFlit(int port, int vc, flitModule *flit) {
 		m_ca_handler.increaseContention(routing->minOutputPort(flit->destId));
 	}
 	inPorts[port]->insert(vc, flit, g_flit_size);
+	/* Update QCN CP counter */
+	if (g_congestion_management == QCNSW) this->qcnCpSamplingCounter[port]--;
 }
 
 /*
@@ -432,12 +501,15 @@ void switchModule::insertFlit(int port, int vc, flitModule *flit) {
  */
 void switchModule::injectFlit(int port, int vc, flitModule * flit) {
 	double base_latency;
-	assert((port / g_p_computing_nodes_per_router) < 1);
+	assert(((port / g_p_computing_nodes_per_router) < 1) || (g_congestion_management == QCNSW && port == portCount));
 	assert((vc / vcCount) < 1 && (vc / g_injection_channels) < 1);
 	assert(switchModule::getCredits(port, flit->cos, vc) >= g_flit_size);
 	if (g_contention_aware && (!g_increaseContentionAtHeader))
 		m_ca_handler.increaseContention(routing->minOutputPort(flit->destId));
-	g_tx_flit_counter++;
+	if (flit->flitType == CNM)
+		g_tx_cnmFlit_counter++;
+	else
+		g_tx_flit_counter++;
 	inPorts[port]->insert(vc, flit, g_flit_size);
 
 	/* Calculate message's base latency and record it. */
@@ -448,7 +520,8 @@ void switchModule::injectFlit(int port, int vc, flitModule * flit) {
 int switchModule::getCredits(int port, unsigned short cos, int channel) {
 	int crdts;
 
-	assert(port >= 0 && port < portCount);
+	assert(port >= 0 && port <= portCount);
+	assert(port < portCount || g_congestion_management == QCNSW);
 	assert(channel >= 0 && channel < vcCount);
 
 	/*
@@ -457,8 +530,8 @@ int switchModule::getCredits(int port, unsigned short cos, int channel) {
 	 * 2- Checking local count of credits (needs actually
 	 * 		sending credits through the channel)
 	 */
-	if (port < g_p_computing_nodes_per_router) {
-		// Version 1, used for injection
+	if (port < g_p_computing_nodes_per_router || port == portCount) {
+		// Version 1, used for injection and qcn port
 		crdts = inPorts[port]->getSpace(cos, channel);
 	} else {
 		// Version 2, used for transit
@@ -555,6 +628,7 @@ void switchModule::increasePortContentionCount(int port) {
 }
 
 void switchModule::orderQueues() {
+	int portCount = (g_congestion_management == QCNSW) ? this->portCount + 1 : this->portCount;
 	for (int count_ports = 0; count_ports < portCount; count_ports++)
 		for (int cos = 0; cos < this->cosLevels; cos++)
 			for (int count_channels = 0; count_channels < vcCount; count_channels++)
@@ -577,11 +651,61 @@ void switchModule::action() {
 
 	updateCredits();
 
-	if (g_routing == PB || g_routing == PB_ANY || g_routing == SRC_ADP) updatePb();
+	if (g_routing == PB || g_routing == PB_ANY || g_routing == SRC_ADP || g_routing == PB_ACOR) updatePb();
+
+    if ((g_routing == ACOR || g_routing == PB_ACOR) && 
+            (g_acor_state_management == SWITCHCGCSRS || g_acor_state_management == SWITCHCGRS ||
+             g_acor_state_management == SWITCHCSRS)) {
+        acor_hyst_cycles_counter--;
+        if (acor_packets_blocked_counter >= acor_inc_state_th_packets)
+            acorIncState();
+        if (acor_hyst_cycles_counter == 0 && 
+                acor_packets_blocked_counter <= acor_dec_state_th_packets)
+            acorDecState();
+        if (acor_packets_blocked_counter >= acor_inc_state_th_packets ||
+                acor_hyst_cycles_counter == 0)
+            acorResetSwitchHysteresisStatus();
+        /* ACOR group 0 switch statistics */
+        if (this->label < g_a_routers_per_group)
+            g_acor_group0_sws_status[label][g_cycle] = acorSwStatus;
+    }
 
 	if (g_contention_aware && g_increaseContentionAtHeader) m_ca_handler.update();
 
 	if (g_vc_misrouting_congested_restriction) this->routing->updateCongestionStatusGlobalLinks();
+
+	/* In case a history window of congestion is employed, shift entries and add an empty one. */
+	if (g_congestion_detection == HISTORY_WINDOW || g_congestion_detection == HISTORY_WINDOW_AVG) {
+		for (int port = 0; port < this->portCount; port++) {
+			for (int cos = 0; cos < this->cosLevels; cos++) {
+				((contAdpRouting *) routing)->congestionWindow[port][cos].erase(
+						((contAdpRouting *) routing)->congestionWindow[port][cos].begin());
+				((contAdpRouting *) routing)->congestionWindow[port][cos].push_back(0);
+			}
+		}
+	}
+
+	/* QCN CP Occupancy sampling */
+	if (g_congestion_management == QCNSW)
+		for (p = g_p_computing_nodes_per_router; p < g_global_router_links_offset + g_h_global_ports_per_router; p++)
+			if (--this->qcnCpSamplingCounter[p] <= 0) qcnOccupancySampling(p);
+
+	/* QCN RP behaviour - Timer and set portEnrouteMinProb */
+	if (g_congestion_management == QCNSW) {
+		for (p = g_p_computing_nodes_per_router; p < g_qcn_port; p++)
+			if (qcnRpTxBCount[p] <= 0) {
+				if (g_qcn_policy == AIMD || g_qcn_policy == AIAD)
+					this->portEnrouteMinProb[p] += g_qcn_r_ai;
+				else
+					this->portEnrouteMinProb[p] *= g_qcn_r_ai;
+				if (this->portEnrouteMinProb[p] > 100) this->portEnrouteMinProb[p] = 100;
+				if (this->label < g_a_routers_per_group)
+					g_qcn_g0_port_enroute_min_prob[g_cycle][this->label][p - g_p_computing_nodes_per_router] =
+							this->portEnrouteMinProb[p];
+				// Reset counter for setting timer
+				qcnRpTxBCount[p] = g_qcn_bc_limit;
+			}
+	}
 
 	/* Switch can take several iterations over allocation (input + output arbitration) per cycle.
 	 * This helps guaranteeing the attendance of many VCs per channel. */
@@ -590,8 +714,9 @@ void switchModule::action() {
 		for (p = 0; p < this->portCount; p++)
 			this->outputArbiters[p]->initPetitions();
 
+		int inputArbitersPortCount = (g_congestion_management == QCNSW) ? this->portCount + 1 : this->portCount;
 		/* Input arbiters execution */
-		for (in_ports_count = 0; in_ports_count < portCount; in_ports_count++) {
+		for (in_ports_count = 0; in_ports_count < inputArbitersPortCount; in_ports_count++) {
 			/* Reset reserved_port trackers */
 			for (p = 0; p < this->portCount; p++)
 				reservedOutPort[p] = false;
@@ -629,7 +754,34 @@ void switchModule::action() {
 				// Attends petition (consumes packet or sends it through 'sendFlit')
 				vc = this->outputArbiters[out_ports_count]->inputChannels[in_ports_count];
 				cos = this->outputArbiters[out_ports_count]->inputCos[in_ports_count];
-				sendFlit(in_ports_count, cos, vc, out_ports_count, routing->neighPort[out_ports_count],
+				inPorts[in_ports_count]->checkFlit(cos, vc, flit);
+				// QCN RP behaviour at reception of CNM
+				if (g_congestion_management == QCNSW && (flit->destSwitch == this->label && // destination node is this switch
+						flit->flitType == CNM)) { // message is a CNM
+					assert(in_ports_count >= g_p_computing_nodes_per_router);
+					assert(in_ports_count < g_global_router_links_offset + g_h_global_ports_per_router);
+					assert(flit->sourceSW != this->label);
+					switch (g_qcn_implementation) {
+						case QCNSWSELF:
+							// Reduce the probability like QCNSWBASE (!break;)
+						case QCNSWOUT:
+							// Reduce the probability like QCNSWBASE (!break;)
+						case QCNSWBASE:
+							/* Multiplicative decrease of probability */
+							qcnMinProbabilityDecrease(in_ports_count, flit->fb);
+							break;
+						case QCNSWCOMPLETE:
+							// Modify probability as FBCOMP
+						case QCNSWOUTFBCOMP:
+							// Modify probability
+						case QCNSWFBCOMP:
+							qcnFeedbackComparison(in_ports_count, flit->fb);
+							break;
+					}
+					// Reset counter for setting timer
+					qcnRpTxBCount[in_ports_count] = g_qcn_bc_limit;
+				}
+				xbarTraversal(in_ports_count, cos, vc, out_ports_count, routing->neighPort[out_ports_count],
 						this->outputArbiters[out_ports_count]->nextChannels[in_ports_count]);
 			}
 		}
@@ -700,9 +852,9 @@ void switchModule::updatePb() {
 					if (g_vc_usage == BASE)
 						vc = channel;
 					else if (g_reactive_traffic)
-						vc = routing->globalResVc[channel];
+						vc = routing->vcM->globalResVc[channel];
 					else
-						vc = routing->globalVc[channel];
+						vc = routing->vcM->globalVc[channel];
 
 					if (g_congestion_detection == PER_PORT_MIN)
 						qMean += switchModule::getCreditsMinOccupancy(port, cos, vc);
@@ -719,9 +871,9 @@ void switchModule::updatePb() {
 					if (g_vc_usage == BASE)
 						vc = channel;
 					else if (g_reactive_traffic)
-						vc = routing->globalResVc[channel];
+						vc = routing->vcM->globalResVc[channel];
 					else
-						vc = routing->globalVc[channel];
+						vc = routing->vcM->globalVc[channel];
 
 					if (g_congestion_detection == PER_PORT_MIN)
 						qCur += switchModule::getCreditsMinOccupancy(port, cos, vc);
@@ -741,9 +893,9 @@ void switchModule::updatePb() {
 					if (g_vc_usage == BASE)
 						vc = channel;
 					else if (g_reactive_traffic)
-						vc = routing->globalResVc[channel];
+						vc = routing->vcM->globalResVc[channel];
 					else
-						vc = routing->globalVc[channel];
+						vc = routing->vcM->globalVc[channel];
 
 					if (g_congestion_detection == PER_VC_MIN)
 						qMean += switchModule::getCreditsMinOccupancy(port, cos, vc);
@@ -759,9 +911,9 @@ void switchModule::updatePb() {
 					if (g_vc_usage == BASE)
 						vc = channel;
 					else if (g_reactive_traffic)
-						vc = routing->globalResVc[channel];
+						vc = routing->vcM->globalResVc[channel];
 					else
-						vc = routing->globalVc[channel];
+						vc = routing->vcM->globalVc[channel];
 
 					if (g_congestion_detection == PER_VC_MIN)
 						isCongested = switchModule::getCreditsMinOccupancy(port, cos, vc) > threshold;
@@ -816,7 +968,7 @@ void switchModule::sendCredits(int port, unsigned short cos, int channel, flitMo
 	int neighInputPort;
 	float latency;
 
-	if (port < g_local_router_links_offset) { /* Injection link */
+	if (port < g_local_router_links_offset || port == g_global_router_links_offset + g_h_global_ports_per_router) { /* Injection link */
 		return;
 	}
 
@@ -873,7 +1025,7 @@ bool switchModule::isGlobalLinkCongested(const flitModule * flit) {
 	if (g_congestion_detection == PER_PORT || g_congestion_detection == PER_PORT_MIN)
 		vc = 0;
 	else {
-		if (g_vc_usage == FLEXIBLE)
+		if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX)
 			vc = g_global_link_channels - 1;
 		else {
 			if (flit->flitType == RESPONSE && g_reactive_traffic)
@@ -988,6 +1140,16 @@ bool switchModule::isVCUnlocked(flitModule * flit, int port, int vc) {
 }
 
 void switchModule::trackTransitStatistics(flitModule *flitEx, int input_channel, int outP, int nextC) {
+	assert(
+			(flitEx->flitType != CNM
+					&& ((outP < g_global_router_links_offset && nextC <= this->routing->vcM->getHighestVc(portClass::local))
+							|| (outP >= g_global_router_links_offset && nextC <= this->routing->vcM->getHighestVc(portClass::global))))
+					|| (flitEx->flitType == CNM
+							&& ((outP < g_global_router_links_offset && nextC > this->routing->vcM->getHighestVc(portClass::local)
+									&& nextC <= this->qcnRouting->vcM->getHighestVc(portClass::local))
+									|| (outP >= g_global_router_links_offset
+											&& nextC > this->routing->vcM->getHighestVc(portClass::global)
+											&& nextC <= this->qcnRouting->vcM->getHighestVc(portClass::global)))));
 	bool input_emb_escape, output_emb_escape, subnetworkInjection = false;
 
 	/* Update hop & contention counters */
@@ -1022,6 +1184,8 @@ void switchModule::trackTransitStatistics(flitModule *flitEx, int input_channel,
 	}
 }
 
+/* PROVISIONAL: when a history window is used, it
+ * also tracks the number of sent flits in the last previous cycles. */
 void switchModule::updateMisrouteCounters(int outP, flitModule * flitEx) {
 	/* Misrouted flits counters */
 	if (g_internal_cycle >= g_warmup_cycles) {
@@ -1052,13 +1216,21 @@ void switchModule::updateMisrouteCounters(int outP, flitModule * flitEx) {
 				break;
 		}
 	}
+
+	if ((g_congestion_detection == HISTORY_WINDOW || g_congestion_detection == HISTORY_WINDOW_AVG)
+			&& outP >= g_p_computing_nodes_per_router) {
+		((contAdpRouting *) routing)->congestionWindow[outP][flitEx->cos].back() += flitEx->length;
+		assert(((contAdpRouting *) routing)->congestionWindow[outP][flitEx->cos].back() <= flitEx->length);
+	}
+
 }
 
 /*
  * Makes effective flit transferal from one buffer to another. If flit is to be consumed, tracks
  * its statistics and deletes it.
  */
-void switchModule::sendFlit(int input_port, unsigned short cos, int input_channel, int outP, int nextP, int nextC) {
+void switchModule::xbarTraversal(int input_port, unsigned short cos, int input_channel, int outP, int nextP,
+		int nextC) {
 	assert(outP >= 0 && outP < this->portCount);
 	flitModule *flitEx;
 	bool nextVC_unLocked, input_emb_escape = false, output_emb_escape = false, input_phy_ring = false, output_phy_ring =
@@ -1257,8 +1429,10 @@ void switchModule::sendFlit(int input_port, unsigned short cos, int input_channe
 		}
 
 		outPorts[outP]->insert(nextC, flitEx, g_flit_size);
+		if (g_congestion_management == QCNSW) this->qcnRpTxBCount[outP] -= g_flit_size;
 
-		if (input_port < g_p_computing_nodes_per_router) {
+		if (input_port < g_p_computing_nodes_per_router
+				|| (g_congestion_management == QCNSW && input_port == g_qcn_port)) {
 			flitEx->setChannel(nextC);
 			assert(flitEx->injLatency < 0);
 			flitEx->injLatency = g_internal_cycle - flitEx->inCycle;
@@ -1313,3 +1487,247 @@ void switchModule::printSwitchStatus() {
 	cerr << "-------------------------------------------------------------------------" << endl;
 }
 
+short int switchModule::getPortEnrouteMinimalProbability(int port) {
+	assert(port >= g_p_computing_nodes_per_router && port < g_global_router_links_offset + g_h_global_ports_per_router);
+	return this->portEnrouteMinProb[port];
+}
+
+/*
+ * Occupancy Sampling for QCN defined in: Occupancy Sampling for Terabit CEE Switches
+ * by:
+ * Fredy D. Neeser, Nikolaos I. Chrysos, Roft Clauberf, Daniel Crisan, Mith Gusat, Cyriel Minkenberg
+ * Kenneth M. Valk, Claude Basso
+ * This process is part of QCN Congestion Point
+ */
+void switchModule::qcnOccupancySampling(int port) {
+	assert(g_congestion_management == QCNSW);
+	assert(port >= g_p_computing_nodes_per_router && port < g_global_router_links_offset + g_h_global_ports_per_router);
+	assert(this->qcnCpSamplingCounter[port] <= 0);
+
+	short qcnFb;
+	int qcnQlen = 0, qcnQoff, qcnQdelta;
+	int maxQcnFb = g_qcn_q_eq * (2 * g_qcn_w + 1);
+	int portOccupancy = 0;
+
+	/* Calculate occupancy of port in phits */
+	for (int i = 0; i < vcCount; i++)
+		for (short c = 0; c < this->cosLevels - 1; c++)
+			qcnQlen += inPorts[port]->getBufferOccupancy(c, i); /* phits */
+	/* Calculate portOccupancy as a number of packets */
+	portOccupancy = qcnQlen / g_flit_size; /* flits - packets */
+
+	/* Calculation of QCN feedback value */
+	qcnQoff = qcnQlen - g_qcn_q_eq;
+	qcnQdelta = qcnQlen - qcnQlenOld[port];
+	qcnFb = qcnQoff + g_qcn_w * qcnQdelta;
+	if (qcnFb > maxQcnFb)
+		qcnFb = maxQcnFb;
+	else if (qcnFb < 0) qcnFb = 0;
+	qcnFb = qcnFb * 63 / maxQcnFb; /* Quantify to six bits */
+	assert(qcnFb >= 0 && qcnFb <= 63);
+
+	/* Select culprit flow and send congestion notification if: */
+	if (portOccupancy > 0) { // currently there are packets in port
+		if (qcnFb > 0 and ((rand() % 100 + 1) <= g_qcn_cnms_percent)) {
+			/* If feedback is possitive and only send g_qcn_cnms_percent% of CNMs */
+			/* Get a random flit of input buffer */
+			flitModule *flitRand = NULL, *cnmFlit;
+			int ranPktIdx = (rand()) % portOccupancy;
+			int aux = 0, aux2 = 0;
+			for (short c = 0; c < this->cosLevels - 1; c++)
+				for (int i = 0; i < vcCount && flitRand == NULL; i++) {
+					aux2 = aux;
+					aux += inPorts[port]->getBufferOccupancy(c, i) / g_flit_size;
+					if (aux >= ranPktIdx) inPorts[port]->checkFlit(c, i, flitRand, ranPktIdx - aux2);
+				}
+			assert(flitRand != NULL && flitRand->flitType != CNM);
+			/* Generate Congestion Nofitication Message (this messages are not accounted as data traffic */
+			cnmFlit = new flitModule(g_tx_cnmFlit_counter, g_tx_cnmFlit_counter, 0,
+					this->label * g_p_computing_nodes_per_router, flitRand->sourceId,
+					(int) (flitRand->sourceId / g_p_computing_nodes_per_router), 0, true, true, g_cos_levels - 1, CNM);
+			cnmFlit->channel = g_generators_list[this->label * g_p_computing_nodes_per_router]->getInjectionVC(
+					flitRand->sourceId, CNM);
+			cnmFlit->setQcnParameters(qcnFb, qcnQoff, qcnQdelta);
+			cnmFlit->inCycle = g_cycle;
+			cnmFlit->inCyclePacket = g_cycle;
+			if (this->switchModule::getCredits(g_qcn_port, g_cos_levels - 1, cnmFlit->channel) >= g_flit_size) { // there are space in qcnPort
+				injectFlit(g_qcn_port, cnmFlit->channel, cnmFlit);
+				if (g_cycle >= g_warmup_cycles) this->cnmPacketsInj++;
+			} else
+				delete cnmFlit;
+			/* When a CNM is generated for a switch, this sw reuse the same information for modifying its routing table */
+			if ((g_qcn_implementation == QCNSWSELF || g_qcn_implementation == QCNSWCOMPLETE)
+					&& flitRand->destGroup != (this->label / g_a_routers_per_group)) {
+				int outP = this->routing->minOutputPort(flitRand->destId);
+				assert(outP >= g_local_router_links_offset and outP < g_qcn_port);
+				if (g_qcn_policy == AIMD || g_qcn_policy == MIMD)
+					portEnrouteMinProb[outP] *= (float) (1 - g_qcn_gd * qcnFb);
+				else
+					portEnrouteMinProb[outP] -= (float) (g_qcn_gd * qcnFb);
+				if (portEnrouteMinProb[outP] < g_qcn_min_rate) portEnrouteMinProb[outP] = g_qcn_min_rate;
+				if (this->label < g_a_routers_per_group)
+					g_qcn_g0_port_enroute_min_prob[g_cycle][this->label][outP - g_p_computing_nodes_per_router] =
+							portEnrouteMinProb[outP];
+			}
+		}
+		// Reset timer and save current queue length in old qlen.
+		this->qcnCpSamplingCounter[port] = g_qcn_cp_sampling_interval;
+		qcnQlenOld[port] = qcnQlen;
+	}
+}
+
+void switchModule::qcnMinProbabilityDecrease(int port, float qcnfb) {
+	assert((1 - g_qcn_gd * qcnfb) >= 0.0 && (1 - g_qcn_gd * qcnfb) < 1.0);
+	if (g_qcn_policy == AIMD || g_qcn_policy == MIMD)
+		portEnrouteMinProb[port] *= (float) (1 - g_qcn_gd * qcnfb);
+	else
+		portEnrouteMinProb[port] -= (float) (g_qcn_gd * qcnfb);
+	if (portEnrouteMinProb[port] < g_qcn_min_rate) portEnrouteMinProb[port] = g_qcn_min_rate;
+	if (this->label < g_a_routers_per_group)
+		g_qcn_g0_port_enroute_min_prob[g_cycle][this->label][port - g_p_computing_nodes_per_router] =
+				portEnrouteMinProb[port];
+}
+
+void switchModule::qcnFeedbackComparison(int port, float qcnfb) {
+	// Save feedback values received */
+	qcnPortFb[port] = qcnfb;
+	// Calculate average feedback in local and global ports (Fb avg for this switch)
+	qcnPortFb[0] = 0;
+	for (int aux = g_p_computing_nodes_per_router; aux < g_qcn_port; aux++)
+		qcnPortFb[0] += qcnPortFb[aux];
+	qcnPortFb[0] /= (g_a_routers_per_group - 1 + g_h_global_ports_per_router);
+	if (this->label < g_a_routers_per_group) {
+		g_qcn_g0_port_congestion[g_cycle][this->label][port] = qcnPortFb[port];
+		g_qcn_g0_port_congestion[g_cycle][this->label][0] = qcnPortFb[0];
+	}
+	/*
+	 * # = average
+	 * Fb can be in position 1, 2, 3 with the following result:
+	 *                              #<---->th1         th2
+	 * <------------ increase (1)--------->
+	 *                                     <nothing (2)>
+	 *                                                  <--- reduce (3) -->
+	 * --------------------------------------------------------------------
+	 */
+	// If port feedback is less than average value plus threshold to increase -> increase probability
+	if (qcnPortFb[port] <= qcnPortFb[0] + g_qcn_th1) {
+		if (g_qcn_policy == AIMD || g_qcn_policy == AIAD)
+			this->portEnrouteMinProb[port] += g_qcn_r_ai;
+		else
+			this->portEnrouteMinProb[port] *= g_qcn_r_ai;
+		if (this->portEnrouteMinProb[port] > 100) this->portEnrouteMinProb[port] = 100;
+		if (this->label < g_a_routers_per_group)
+			g_qcn_g0_port_enroute_min_prob[g_cycle][this->label][port - g_p_computing_nodes_per_router] =
+					portEnrouteMinProb[port];
+	} else if (qcnPortFb[port] > qcnPortFb[0] + g_qcn_th2) {
+		// Multiplicative decrease of probability based on feedback comparison
+		if (g_qcn_policy == AIMD || g_qcn_policy == MIMD) {
+			float reduction = 1 - g_qcn_gd * (qcnPortFb[port] - qcnPortFb[0]);
+			assert(reduction >= 0 && reduction < 1);
+			portEnrouteMinProb[port] *= reduction;
+		} else {
+			float reduction = g_qcn_gd * (qcnPortFb[port] - qcnPortFb[0]);
+			assert(reduction >= 0 && reduction < 64);
+			portEnrouteMinProb[port] -= reduction;
+		}
+		if (portEnrouteMinProb[port] < g_qcn_min_rate) portEnrouteMinProb[port] = g_qcn_min_rate;
+		if (this->label < g_a_routers_per_group)
+			g_qcn_g0_port_enroute_min_prob[g_cycle][this->label][port - g_p_computing_nodes_per_router] =
+					portEnrouteMinProb[port];
+	} // if fb is between mean + th1 and mean + th2 -> do nothing
+}
+
+void switchModule::acorResetSwitchHysteresisStatus() {
+    this->acor_hyst_cycles_counter = g_acor_hysteresis_cycle_duration_cycles;
+    this->acor_packets_blocked_counter = 0;
+    switch (g_acor_state_management) {
+        case SWITCHCGCSRS:
+            switch (acorSwStatus) {
+                case CRGLGr:
+                    acor_inc_state_th_packets = g_acor_inc_state_first_th_packets;
+                    acor_dec_state_th_packets = INT_MIN; // Never happens
+                    break;
+                case CRGLSw:
+                    acor_inc_state_th_packets = g_acor_inc_state_second_th_packets;
+                    acor_dec_state_th_packets = g_acor_dec_state_first_th_packets;
+                    break;
+                case RRGLSw:
+                    acor_inc_state_th_packets = INT_MAX; // Never happens
+                    acor_dec_state_th_packets = g_acor_dec_state_second_th_packets;
+                    break;
+                default:
+                    cerr << "ERROR: Status not defined" << endl;
+                    assert(false);
+            }
+            break;
+        case SWITCHCGRS:
+            switch (acorSwStatus) {
+                case CRGLGr:
+                    acor_inc_state_th_packets = g_acor_inc_state_first_th_packets;
+                    acor_dec_state_th_packets = INT_MIN; // Never happens
+                    break;
+                case RRGLSw:
+                    acor_inc_state_th_packets = INT_MAX; // Never happens
+                    acor_dec_state_th_packets = g_acor_dec_state_first_th_packets;
+                    break;
+                default:
+                    cerr << "ERROR: Status not defined" << endl;
+                    assert(false);
+            }
+            break;
+        case SWITCHCSRS:
+            switch (acorSwStatus) {
+                case CRGLSw:
+                    acor_inc_state_th_packets = g_acor_inc_state_first_th_packets;
+                    acor_dec_state_th_packets = INT_MIN; // Never happens
+                    break;
+                case RRGLSw:
+                    acor_inc_state_th_packets = INT_MAX; // Never happens
+                    acor_dec_state_th_packets = g_acor_dec_state_first_th_packets;
+                    break;
+                default:
+                    cerr << "ERROR: Status not defined" << endl;
+                    assert(false);
+            }
+            break;
+        default:
+            cerr << "ERROR: Switch state management not defined" << endl;
+            assert(false);
+    }
+}
+
+acorState switchModule::acorGetState() {
+    return this->acorSwStatus;
+}
+
+void switchModule::acorIncState() {
+    switch (g_acor_state_management) {
+        case SWITCHCGCSRS:
+        case SWITCHCSRS:
+            acorSwStatus = static_cast<acorState> (acorSwStatus + 1);
+            break;
+        case SWITCHCGRS:
+            acorSwStatus = static_cast<acorState> (acorSwStatus + 2);
+            break;
+        default:
+            cerr << "ERROR: Switch state management not defined" << endl;
+            assert(false);
+    }
+    assert(acorSwStatus >= CRGLGr && acorSwStatus <= RRGLSw);
+}
+
+void switchModule::acorDecState() {
+    switch (g_acor_state_management) {
+        case SWITCHCGCSRS:
+        case SWITCHCSRS:
+            acorSwStatus = static_cast<acorState> (acorSwStatus - 1);
+            break;
+        case SWITCHCGRS:
+            acorSwStatus = static_cast<acorState> (acorSwStatus - 2);
+            break;
+        default:
+            cerr << "ERROR: Switch state management not defined" << endl;
+            assert(false);
+    }
+    assert(acorSwStatus >= CRGLGr && acorSwStatus <= RRGLSw);
+}

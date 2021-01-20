@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -77,6 +77,9 @@ generatorModule::generatorModule(int interArrivalTime, string name, int sourceLa
 			injResVcs.push_back(i);
 		}
 	}
+        /* Create the destinations for random permutation before any injection */
+        if (g_traffic == RANDOMPERMUTATION || g_traffic == RANDOMPERMUTATION_RCTV)
+            this->pattern->setDestination(g_traffic);
 }
 
 generatorModule::~generatorModule() {
@@ -224,6 +227,7 @@ flitModule* generatorModule::generateFlit(FlitType flitType, int destId) {
 	return genFlit;
 }
 
+/* TODO: change this function to static and inline? */
 void generatorModule::getNodeCoords(int nodeId, int &nodeP, int &nodeA, int &nodeH) {
 	nodeH = int(nodeId / (g_a_routers_per_group * g_p_computing_nodes_per_router));
 	nodeP = module(nodeId, g_p_computing_nodes_per_router);
@@ -334,10 +338,10 @@ int generatorModule::getInjectionVC(int dest, FlitType flitType) {
 
 	assert(dest >= 0 && dest < g_number_generators);
 
-	if (flitType == PETITION)
-		aux_vec = injPetVcs;
-	else
+	if (flitType == RESPONSE || flitType == CNM) {
 		aux_vec = injResVcs;
+	} else
+		aux_vec = injPetVcs;
 
 	switch (g_vc_injection) {
 		case RAND: /* TODO: Currently CoS level feature is not exploited */
@@ -347,7 +351,9 @@ int generatorModule::getInjectionVC(int dest, FlitType flitType) {
 				}
 			}
 			if (aux_vec2.size() == 0) return -1;
-			vc = aux_vec2[rand() / (int) (((unsigned) RAND_MAX) / (aux_vec2.size()))];
+			aux = (int) (aux_vec2.size() * rand() / ((unsigned) RAND_MAX + 1));
+			assert (aux >= 0 && aux < aux_vec2.size());
+			vc = aux_vec2[aux];
 			break;
 		case DEST:
 			aux = int(dest * (aux_vec.size()) / g_number_generators);
@@ -423,6 +429,10 @@ void generatorModule::consumeFlit(flitModule *flit, int input_port, int input_ch
 	<< ", group " << flit->sourceGroup << ") to dest " << flit->destId << " (sw " << flit->destSwitch
 	<< ", group " << flit->destGroup << "). Consuming pkt in node " << this->destLabel << endl;
 #endif
+	if (flit->flitType == CNM) {
+		if (g_congestion_management != QCNSW)
+			assert(false); /* CNM message type not exists without QCNSW congestion management mechanisms */
+	}
 	trackConsumptionStatistics(flit, input_port, input_channel, pPos);
 	delete flit;
 }
@@ -458,7 +468,7 @@ void generatorModule::trackConsumptionStatistics(flitModule *flit, int inP, int 
 		this->switchM->injectFlit(outP, responseFlit->channel, responseFlit);
 	} else if (g_reactive_traffic) g_generators_list[flit->destId]->decreasePendingPetitions();
 
-	if (inP < g_p_computing_nodes_per_router) {
+	if (inP < g_p_computing_nodes_per_router || (g_congestion_management == QCNSW && inP == g_qcn_port)) {
 		assert(flit->injLatency < 0);
 		flit->injLatency = g_internal_cycle - flit->inCycle;
 		assert(flit->injLatency >= 0);
@@ -466,30 +476,12 @@ void generatorModule::trackConsumptionStatistics(flitModule *flit, int inP, int 
 
 	if (g_misrouting_trigger == CA || g_misrouting_trigger == HYBRID || g_misrouting_trigger == FILTERED
 			|| g_misrouting_trigger == DUAL || g_misrouting_trigger == CA_REMOTE
-			|| g_misrouting_trigger == HYBRID_REMOTE || g_misrouting_trigger == WEIGTHED_CA) {
+			|| g_misrouting_trigger == HYBRID_REMOTE || g_misrouting_trigger == WEIGHTED_CA) {
 		assert(flit->localContentionCount >= 0);
 		assert(flit->globalContentionCount >= 0);
 		assert(flit->localEscapeContentionCount >= 0);
 		assert(flit->globalEscapeContentionCount >= 0);
 	}
-
-	if (flit->tail == 1) g_rx_packet_counter += 1;
-	g_rx_flit_counter += 1;
-	g_total_hop_counter += flit->hopCount;
-	g_local_hop_counter += flit->localHopCount;
-	g_global_hop_counter += flit->globalHopCount;
-	g_local_ring_hop_counter += flit->localEscapeHopCount;
-	g_global_ring_hop_counter += flit->globalEscapeHopCount;
-	g_local_tree_hop_counter += flit->localEscapeHopCount;
-	g_global_tree_hop_counter += flit->globalEscapeHopCount;
-	g_subnetwork_injections_counter += flit->subnetworkInjectionsCount;
-	g_root_subnetwork_injections_counter += flit->rootSubnetworkInjectionsCount;
-	g_source_subnetwork_injections_counter += flit->sourceSubnetworkInjectionsCount;
-	g_dest_subnetwork_injections_counter += flit->destSubnetworkInjectionsCount;
-	g_local_contention_counter += flit->localContentionCount;
-	g_global_contention_counter += flit->globalContentionCount;
-	g_local_escape_contention_counter += flit->localEscapeContentionCount;
-	g_global_escape_contention_counter += flit->globalEscapeContentionCount;
 
 	if (g_internal_cycle >= g_warmup_cycles) {
 		g_base_latency += flit->getBaseLatency();
@@ -509,6 +501,30 @@ void generatorModule::trackConsumptionStatistics(flitModule *flit, int inP, int 
 			+ flit->localContentionCount + flit->globalContentionCount + flit->localEscapeContentionCount
 			+ flit->globalEscapeContentionCount;
 	assert(flitLatency == lat + g_flit_size);
+
+	if (flit->flitType == CNM) {
+		g_rx_cnmFlit_counter++;
+		return; /* The rest of statistics don't have interest for QCN messages */
+	}
+
+	if (flit->tail == 1) g_rx_packet_counter += 1;
+	g_rx_flit_counter += 1;
+	g_total_hop_counter += flit->hopCount;
+	g_local_hop_counter += flit->localHopCount;
+	g_global_hop_counter += flit->globalHopCount;
+	g_local_ring_hop_counter += flit->localEscapeHopCount;
+	g_global_ring_hop_counter += flit->globalEscapeHopCount;
+	g_local_tree_hop_counter += flit->localEscapeHopCount;
+	g_global_tree_hop_counter += flit->globalEscapeHopCount;
+	g_subnetwork_injections_counter += flit->subnetworkInjectionsCount;
+	g_root_subnetwork_injections_counter += flit->rootSubnetworkInjectionsCount;
+	g_source_subnetwork_injections_counter += flit->sourceSubnetworkInjectionsCount;
+	g_dest_subnetwork_injections_counter += flit->destSubnetworkInjectionsCount;
+	g_local_contention_counter += flit->localContentionCount;
+	g_global_contention_counter += flit->globalContentionCount;
+	g_local_escape_contention_counter += flit->localEscapeContentionCount;
+	g_global_escape_contention_counter += flit->globalEscapeContentionCount;
+        g_rx_acorState_counter[flit->acorFlitStatus]++;
 
 	/* Latency HISTOGRAM */
 	if (g_internal_cycle >= g_warmup_cycles) {

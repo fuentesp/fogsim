@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -20,8 +20,17 @@
 
 #include "rrArbiter.h"
 
-rrArbiter::rrArbiter(PortType type, int portNumber, unsigned short cos, int numPorts, switchModule *switchM) :
-		arbiter(type, portNumber, cos, numPorts, switchM) {
+rrArbiter::rrArbiter(PortType type, int portNumber, unsigned short cos, int numPorts, switchModule *switchM) 
+	: arbiter(type, portNumber, cos, numPorts, switchM) {
+	int startPort = rand();
+
+	/* Begin with a random port and increase in order */
+	this->portList = new int[ports];
+	this->qcnList = new short[ports];
+	for (int i = 0; i < ports; i++) {
+		this->portList[i] = (i + startPort) % ports;
+		this->qcnList[i] = -1;
+	}
 }
 
 rrArbiter::~rrArbiter() {

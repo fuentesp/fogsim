@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -26,7 +26,7 @@ ioqSwitchModule::ioqSwitchModule(string name, int label, int aPos, int hPos, int
 	this->m_speedup_interval = (long double) (1) / (long double) g_internal_speedup;
 	this->m_internal_cycle = 0;
 
-	int p, vc;
+	int p, vc, cos;
 
 	for (p = 0; p < g_global_router_links_offset + g_h_global_ports_per_router; p++)
 		delete outPorts[p];
@@ -60,20 +60,25 @@ ioqSwitchModule::ioqSwitchModule(string name, int label, int aPos, int hPos, int
 		case BASE:
 			for (p = 0; p < g_local_router_links_offset; p++)
 				for (vc = 0; vc < g_injection_channels; vc++)
-					outPorts[p]->setMaxOutOccupancy(0, vc, g_out_queue_length);
+					for (cos = 0; cos < this->cosLevels; cos++)
+						outPorts[p]->setMaxOutOccupancy(cos, vc, g_out_queue_length);
 
 			for (p = g_local_router_links_offset; p < g_global_router_links_offset; p++)
 				for (vc = 0; vc < g_local_link_channels; vc++)
-					outPorts[p]->setMaxOutOccupancy(0, vc, g_out_queue_length);
+					for (cos = 0; cos < this->cosLevels; cos++)
+						outPorts[p]->setMaxOutOccupancy(cos, vc, g_out_queue_length);
 
 			for (p = g_global_router_links_offset; p < g_global_router_links_offset + g_h_global_ports_per_router; p++)
 				for (vc = 0; vc < g_global_link_channels; vc++)
-					outPorts[p]->setMaxOutOccupancy(0, vc, g_out_queue_length);
+					for (cos = 0; cos < this->cosLevels; cos++)
+						outPorts[p]->setMaxOutOccupancy(cos, vc, g_out_queue_length);
 			break;
+		case TBFLEX:
 		case FLEXIBLE:
 			for (p = 0; p < this->portCount; p++)
 				for (vc = 0; vc < vcCount; vc++)
-					outPorts[p]->setMaxOutOccupancy(0, vc, g_out_queue_length);
+					for (cos = 0; cos < this->cosLevels; cos++)
+						outPorts[p]->setMaxOutOccupancy(cos, vc, g_out_queue_length);
 			break;
 	}
 	lastCheckedOutBuffer = new int[this->portCount];
@@ -111,7 +116,7 @@ void ioqSwitchModule::updateOutputBuffer(int port) {
 		outBuffer = (lastCheckedOutBuffer[port] + aux + 1) % num_buffers;
 		if (outPorts[port]->canSendFlit(0, 0, outBuffer)) {
 			lastCheckedOutBuffer[port] = outBuffer;
-			outPorts[port]->checkFlit(0, 0, flit, outBuffer);
+			outPorts[port]->checkFlit(cosOutPort, 0, flit, outBuffer);
 			if (flit != NULL) {
 				int nextP, nextC, inP, inC;
 				nextC = flit->channel;
@@ -128,7 +133,7 @@ void ioqSwitchModule::updateOutputBuffer(int port) {
 						<< flit->destSwitch << ", group " << flit->destGroup << "). Consuming pkt in node " << port
 						<< endl;
 #endif
-						outPorts[port]->extract(0, nextC, flit, g_flit_size, outBuffer);
+						outPorts[port]->extract(cosOutPort, nextC, flit, g_flit_size, outBuffer);
 
 						/* Update contention counters (time waiting in queues) */
 						flit->addContention(inP, this->label);
@@ -143,7 +148,8 @@ void ioqSwitchModule::updateOutputBuffer(int port) {
 					if (this->switchModule::nextPortCanReceiveFlit(port)) {
 						assert(switchModule::getCredits(port, flit->cos, nextC) >= g_flit_size);
 						flit->setChannel(nextC);
-						if (inP < g_p_computing_nodes_per_router) {
+						if (inP < g_p_computing_nodes_per_router
+								|| (g_congestion_management == QCNSW && inP == g_qcn_port)) {
 							assert(flit->injLatency < 0);
 							flit->injLatency = g_internal_cycle - flit->inCycle;
 							assert(flit->injLatency >= 0);
@@ -272,7 +278,7 @@ void ioqSwitchModule::updateOutputBuffer(int port) {
 							}
 						}
 						/* Pkt is sent */
-						outPorts[port]->extract(0, nextC, flit, g_flit_size);
+						outPorts[port]->extract(cosOutPort, nextC, flit, g_flit_size);
 						routing->neighList[port]->insertFlit(nextP, nextC, flit);
 						trackTransitStatistics(flit, inP, port, nextC);
 					}
@@ -316,7 +322,8 @@ void ioqSwitchModule::txFlit(int port, flitModule * flit) {
 /*
  * Makes effective flit transferal from input to output buffer.
  */
-void ioqSwitchModule::sendFlit(int input_port, unsigned short cos, int input_channel, int outP, int nextP, int nextC) {
+void ioqSwitchModule::xbarTraversal(int input_port, unsigned short cos, int input_channel, int outP, int nextP,
+		int nextC) {
 	flitModule *flitEx;
 	bool nextVC_unLocked, input_emb_escape = false, output_emb_escape = false, input_phy_ring = false, output_phy_ring =
 			false, subnetworkInjection = false;
@@ -380,6 +387,7 @@ void ioqSwitchModule::sendFlit(int input_port, unsigned short cos, int input_cha
 	updateMisrouteCounters(outP, flitEx);
 
 	txFlit(outP, flitEx);
+	if (g_congestion_management == QCNSW) this->qcnRpTxBCount[outP] -= g_flit_size;
 }
 
 /*
@@ -465,4 +473,84 @@ void ioqSwitchModule::printSwitchStatus() {
 		}
 	}
 	cerr << "=========================================================================" << endl;
+}
+
+/*
+ * Occupancy Sampling for QCN on output buffer. This process is part of QCN Congestion Point
+ */
+void ioqSwitchModule::qcnOccupancySampling(int port) {
+	// if qcn implementation is OUT (sampling in output queues)
+	if (g_qcn_implementation == QCNSWOUT || g_qcn_implementation == QCNSWOUTFBCOMP) {
+		assert(g_congestion_management == QCNSW);
+		assert(
+				port >= g_p_computing_nodes_per_router
+						&& port < g_global_router_links_offset + g_h_global_ports_per_router);
+		assert(this->qcnCpSamplingCounter[port] <= 0);
+
+		short qcnFb;
+		int qcnQlen = 0, qcnQoff, qcnQdelta;
+		int maxQcnFb = g_qcn_q_eq * (2 * g_qcn_w + 1);
+		int portOccupancy = 0;
+		bool culpritFlitAvail = false;
+		flitModule *culpritFlit = NULL;
+
+		/* Calculate occupancy of port in phits */
+		qcnQlen = outPorts[port]->getBufferOccupancy(0, 0); /* phits */
+		/* Calculate portOccupancy as a number of packets */
+		portOccupancy = qcnQlen / g_flit_size; /* flits - packets */
+
+		/* Calculation of QCN feedback value */
+		qcnQoff = qcnQlen - g_qcn_q_eq;
+		qcnQdelta = qcnQlen - qcnQlenOld[port];
+		qcnFb = qcnQoff + g_qcn_w * qcnQdelta;
+		if (qcnFb > maxQcnFb)
+			qcnFb = maxQcnFb;
+		else if (qcnFb < 0) qcnFb = 0;
+		qcnFb = qcnFb * 63 / maxQcnFb; /* Quantify to six bits */
+		assert(qcnFb >= 0 && qcnFb <= 63);
+
+		for (int pktIdx = 0; !culpritFlitAvail && pktIdx < portOccupancy; pktIdx++) {
+			outPorts[port]->checkFlit(0, 0, culpritFlit, 0, pktIdx);
+			if (culpritFlit != NULL && culpritFlit->flitType != CNM) culpritFlitAvail = true;
+		}
+
+		if (culpritFlitAvail) {
+			if (qcnFb > 0 and ((rand() % 100 + 1) <= g_qcn_cnms_percent)) {
+				/* If feedback is possitive and only send g_qcn_cnms_percent% of CNMs */
+				flitModule *cnmFlit;
+				assert(culpritFlit != NULL && culpritFlit->flitType != CNM);
+				/* Generate Congestion Nofitication Message (this messages are not accounted as data traffic) */
+				cnmFlit = new flitModule(g_tx_cnmFlit_counter, g_tx_cnmFlit_counter, 0,
+						this->label * g_p_computing_nodes_per_router, culpritFlit->sourceId,
+						(int) (culpritFlit->sourceId / g_p_computing_nodes_per_router), 0, true, true, g_cos_levels - 1,
+						CNM);
+				cnmFlit->channel = g_generators_list[this->label * g_p_computing_nodes_per_router]->getInjectionVC(
+						culpritFlit->sourceId, CNM);
+				cnmFlit->setQcnParameters(qcnFb, qcnQoff, qcnQdelta);
+				cnmFlit->inCycle = g_cycle;
+				cnmFlit->inCyclePacket = g_cycle;
+				if (cnmFlit->destSwitch != this->label)
+					if (this->switchModule::getCredits(g_qcn_port, g_cos_levels - 1, cnmFlit->channel) >= g_flit_size) { // there are space in qcnPort
+						injectFlit(g_qcn_port, cnmFlit->channel, cnmFlit);
+						if (g_cycle >= g_warmup_cycles) this->cnmPacketsInj++;
+					} else
+						delete cnmFlit;
+				else {
+					int outP = this->routing->minOutputPort(culpritFlit->destId);
+					assert(outP >= g_local_router_links_offset and outP < g_qcn_port);
+					if (g_qcn_implementation == QCNSWOUT)
+						qcnMinProbabilityDecrease(outP, qcnFb);
+					else if (g_qcn_implementation == QCNSWOUTFBCOMP)
+						qcnFeedbackComparison(outP, qcnFb);
+					else
+						assert(false);
+				}
+			}
+			// Reset timer and save current queue length in old qlen.
+			this->qcnCpSamplingCounter[port] = g_qcn_cp_sampling_interval;
+			qcnQlenOld[port] = qcnQlen;
+		}
+	} else
+		// base implementation of sampling
+		switchModule::qcnOccupancySampling(port);
 }

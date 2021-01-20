@@ -1,7 +1,7 @@
 /*
  FOGSim, simulator for interconnection networks.
  http://fuentesp.github.io/fogsim/
- Copyright (C) 2017 University of Cantabria
+ Copyright (C) 2014-2021 University of Cantabria
 
  This program is free software; you can redistribute it and/or
  modify it under the terms of the GNU General Public License
@@ -26,7 +26,7 @@ outPort::outPort(unsigned short cosLevels, int numVCs, int portNumber, switchMod
 		port(cosLevels, numVCs, portNumber, sw) {
 	/* When using FLEXIBLE vcs, the # of VCs is updated to reflect the new range of vcs
 	 * used (local & global vcs can not share a link to be more easily differentiated */
-	if (g_vc_usage == FLEXIBLE) this->numVCs = g_local_link_channels + g_global_link_channels;
+	if (g_vc_usage == FLEXIBLE || g_vc_usage == TBFLEX) this->numVCs = g_local_link_channels + g_global_link_channels;
 	this->occupancyCredits = new int*[this->cosLevels];
 	this->minOccupancyCredits = new int*[this->cosLevels];
 	this->maxCredits = new int*[this->cosLevels];
